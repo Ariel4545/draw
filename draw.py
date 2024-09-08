@@ -9,7 +9,7 @@ class Window(tkinter.Tk):
         super().__init__()
 
         # apps logo
-        LOGO = PhotoImage(file='Untitled (6).png')
+        LOGO = PhotoImage(file='logo.png')
         self.iconphoto(False, LOGO)
 
         # drawing variables
