@@ -4,52 +4,57 @@ from PIL import ImageGrab, Image, ImageTk, UnidentifiedImageError
 from io import BytesIO
 
 
-
 class Window(tkinter.Tk):
     def __init__(self):
         super().__init__()
 
+        # apps logo
+        LOGO = PhotoImage(file='Untitled (6).png')
+        self.iconphoto(False, LOGO)
+
         # drawing variables
         self.current_mode = 'draw'
-        # self.brush_color = tkinter.StringVar()
-        # self.brush_color.set('black')
+        # output (draw/erase) sizes
         self.output_size, self.eraser_size, self.tool_width = tkinter.IntVar(), tkinter.IntVar(), tkinter.IntVar()
         self.output_size.set(3)
         self.eraser_size.set(5)
+        self.eraser_current, self.draw_current = 1, 1
         self.output_predefined_sizes, self.eraser_predefined_sizes = (2, 3, 5, 7), (3, 5, 6, 9)
         self.predefined_sizes_dict = {'draw': (self.output_predefined_sizes, self.output_size),
                                       'erase': (self.eraser_predefined_sizes, self.eraser_size)}
         self.previous_point = [0, 0]
-        self.move_dict = {'right': [10, 0], 'left': [-10, 0], 'up': [0, -10], 'down': [0, 10]}
+        # draw/erase options
         self.pen_types = 'line', 'round', 'square', 'arrow', 'diamond'
         self.pen_type = tkinter.StringVar()
         self.pen_type.set(self.pen_types[0])
-        self.color, self.paint_color, self.paint_second_color = tkinter.StringVar(), tkinter.StringVar(), tkinter.StringVar()
-        self.color.set('black'), self.paint_color.set('black'), self.paint_second_color.set('black')
-        self.lines_list, self.images_list = [], []
-        self.eraser_current, self.draw_current = 1, 1
         self.eraser_color = 'white'
         self.eraser_bg = tkinter.BooleanVar()
         self.eraser_bg.set(True)
-        self.relief_var_canvas, self.relief_var_buttons = tkinter.StringVar(), tkinter.StringVar()
-        self.relief_var_canvas.set('flat'), self.relief_var_buttons.set('ridge')
-        self.relief_values = 'ridge', 'sunken', 'flat', 'groove'
+        # text variables
         self.font_var, self.size_var, fonts = tkinter.StringVar(), tkinter.IntVar(), font.families()
+        self.typeface_var = tkinter.StringVar()
+        self.text_once = tkinter.BooleanVar()
+        self.tp_values = '', 'underline', 'bold'
         self.font_var.set('Arial'), self.size_var.set(16)
+        self.add_mode = False
+        # lines mannagement and options
         self.last_items = []
         self.smooth_line = tkinter.BooleanVar()
         self.smooth_line.set(True)
-        self.add_mode = False
-        self.text_once = tkinter.BooleanVar()
         self.text_once.set(True)
         self.connected_lines = tkinter.BooleanVar()
         self.px2, self.py2 = 0, 0
         self.dotted_line_var = tkinter.BooleanVar()
-        self.typeface_var = tkinter.StringVar()
-        self.tp_values = '', 'underline', 'bold'
-        self.fs_var = False
         self.dot_size, self.dot_space = '', ''
-
+        # general / otheres
+        self.color, self.paint_color, self.paint_second_color = tkinter.StringVar(), tkinter.StringVar(), tkinter.StringVar()
+        self.color.set('black'), self.paint_color.set('black'), self.paint_second_color.set('black')
+        self.fs_var = False
+        self.lines_list, self.images_list = [], []
+        self.relief_var_canvas, self.relief_var_buttons = tkinter.StringVar(), tkinter.StringVar()
+        self.relief_var_canvas.set('flat'), self.relief_var_buttons.set('ridge')
+        self.relief_values = 'ridge', 'sunken', 'flat', 'groove'
+        self.move_dict = {'right': [10, 0], 'left': [-10, 0], 'up': [0, -10], 'down': [0, 10]}
 
         # window size & cords
         self.width = 1250
@@ -243,6 +248,7 @@ class Window(tkinter.Tk):
         self.set_width()
 
     def save(self):
+        # save image by screenshoting
         image_name = filedialog.asksaveasfilename(
             filetypes=(('PNG', '*.png'), ('JPG', '*.jpg'), ('JPEG Files', '*.jpeg')),
             defaultextension='.jpg')
@@ -280,6 +286,7 @@ class Window(tkinter.Tk):
             item = self.last_items[-1]
 
     def paint(self, event=None):
+        # paint in 3 shapes and many other options
         if not self.current_mode == 'hover':
 
             self.last_items.clear()
@@ -313,6 +320,7 @@ class Window(tkinter.Tk):
             self.previous_point = [0, 0]
 
     def move_paint(self, key):
+        # move paint a bit depending on the arrow keys
         if isinstance(key, str):
             move_x, move_y = self.move_dict[key]
         for l in self.lines_list:
@@ -321,6 +329,7 @@ class Window(tkinter.Tk):
             self.canvas.move(img, move_x, move_y)
 
     def change_size(self):
+        # change general size (for the variable that mannages the draw/erase size)
         if self.current_mode == 'draw':
             size = self.output_size.get()
             drawt_list = list(map(int, list(self.draw_size_box['values'])))
@@ -371,6 +380,7 @@ class Window(tkinter.Tk):
                 self.draw_erase()
 
     def cords(self, event):
+        # some dynamic x,y capture and calculations
         self.x, self.y = event.x, event.y
         self.cords_label.configure(text=f'X coordinates:{self.x} | Y coordinates:{self.y}')
 
@@ -405,6 +415,7 @@ class Window(tkinter.Tk):
             self.bind('<Escape>', self.deactivate)
 
     def deactivate(self, event=None, mode='text'):
+        # deacrivate special addition mode (text for now)
         self.add_mode = False
         if mode == 'text':
             self.add_text.configure(bg='SystemButtonFace', text='Add text')
@@ -425,6 +436,7 @@ class Window(tkinter.Tk):
             self.eraser_color = color
 
     def options(self):
+        # many customizations options
         def change_transparency(size):
             tranc = float(size) / 100
             print(tranc)
@@ -498,6 +510,7 @@ class Window(tkinter.Tk):
         relief_combo_v.bind('<<ComboboxSelected>>', lambda event: change_reliefs())
 
     def hover_mouse(self, activate=True):
+        # neutral that doesn't do anything, and lets you use your mouse in the canvas without worries
         if activate:
             self.canvas.unbind('<B1-Motion>')
             self.canvas.configure(cursor='arrow')
@@ -505,6 +518,7 @@ class Window(tkinter.Tk):
             self.current_mode = 'hover'
 
     def update_cl(self):
+        # update connected lines option
         if self.connected_lines.get():
             self.canvas.unbind('<ButtonRelease-1>')
         else:
