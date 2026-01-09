@@ -1,20 +1,31 @@
 import tkinter as tk
-from tkinter import ttk, colorchooser, filedialog, font, PhotoImage
+from tkinter import ttk, colorchooser, filedialog, font, PhotoImage, messagebox, simpledialog
 from PIL import ImageGrab, Image, ImageTk, UnidentifiedImageError
 from io import BytesIO
 from platform import system
-
+import subprocess
+import os
+import time
+from datetime import datetime, timedelta
+import operator
+from threading import Thread
+import webbrowser
+import math
 
 class Window(tk.Tk):
     def __init__(self):
         super().__init__()
 
         # apps logo
-        LOGO = PhotoImage(file='logo.png')
-        self.iconphoto(False, LOGO)
+        try:
+            LOGO = PhotoImage(file='logo.png')
+            self.iconphoto(False, LOGO)
+        except Exception:
+            pass
 
         # drawing variables
         self.current_mode = 'draw'
+        self.last_mode = 'draw'
         # output (draw/erase) sizes
         self.output_size, self.eraser_size, self.tool_width = tk.IntVar(), tk.IntVar(), tk.IntVar()
         self.output_size.set(3)
@@ -86,19 +97,23 @@ class Window(tk.Tk):
         self.shape_var.set(self.shapes_list[0])
         self.last_smode = 'circle'
 
+        # New features variables
+        self.magnet_var = tk.BooleanVar()
+        self.bitmaps = ['error', 'gray75', 'gray50', 'gray25', 'gray12', 'hourglass', 'info', 'questhead', 'question', 'warning']
+        self.selected_bm = tk.StringVar()
+        self.selected_bm.set(self.bitmaps[0])
+        self.bitmap_active, self.bit_once = tk.BooleanVar(), tk.BooleanVar()
+        self.draw_time, self.erase_time, self.hover_time = 0, 0, 0
+        self.time_dict = {'draw': self.draw_time, 'erase': self.erase_time, 'hover': self.hover_time}
+        self.us_active = False
+        self.last_active = ''
+        self.deactivate_color = tk.BooleanVar()
+        self.mp_x, self.mp_y = 0, 0
+
         # menus varibales
         self.output_mode_var = tk.StringVar()
         self.output_cords_var = tk.StringVar()
         self.output_shape_var = tk.StringVar()
-
-        # window size & cords
-        self.width = 1250
-        self.height = 830
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        placement_x = round((screen_width / 2) - (self.width / 2))
-        placement_y = round((screen_height / 2) - (self.height / 2))
-        self.geometry(f'{self.width}x{self.height}+{placement_x}+{placement_y}')
 
         # window design
         self.title('Ariel\'s / Egon Draw')
@@ -108,7 +123,6 @@ class Window(tk.Tk):
         frame_c = '#d9d9d9'
         if system().lower() == 'macos':
             frame_c = '#ffffff'
-        # still no option for linux because it can be both
 
         # window widgets
         frame_font = 'arial 8 underline'
@@ -123,7 +137,10 @@ class Window(tk.Tk):
             = [tk.Label(self.buttons_frame, text=text, font=frame_font, bg=frame_c) for text in title_list]
         self.topframes = [tk.Frame(self.buttons_frame, bd=1, bg='light grey') for x in range(10)]
         draw_erase_frame, shapes_frame, color_frame, file_frame, sizes_frame, write_frame, edit_frame, ashape_frame, lines_frame, dash_frame = self.topframes
-
+        
+        # New frames
+        self.bit_frame = tk.Frame(self.buttons_frame)
+        self.bonus_frame = tk.Frame(self.buttons_frame)
 
         draw = tk.Button(draw_erase_frame, text='Draw', command=self.draw_erase, borderwidth=1, bg='grey')
         eraser = tk.Button(draw_erase_frame, text='Eraser', command=lambda: self.draw_erase('erase'),
@@ -147,6 +164,7 @@ class Window(tk.Tk):
         second_color = tk.Button(color_frame, text='Secondary color',
                                       command=lambda: self.color_select('second'), borderwidth=1)
         deafult_bg = tk.Button(color_frame, text='Canvas color', command=self.canvas_color, bd=1)
+        self.change_colorb = tk.Button(color_frame, text='Edit color', command=self.change_color, borderwidth=1)
 
         self.add_text = tk.Button(write_frame, text='Add text', command=self.add_special, borderwidth=1)
         self.font_combo = ttk.Combobox(write_frame, width=15, textvariable=self.font_var, state='readonly',
@@ -165,6 +183,7 @@ class Window(tk.Tk):
                                       borderwidth=1)
         undo = tk.Button(edit_frame, text='Undo', command=self.undo, borderwidth=1)
         self.redo_button = tk.Button(edit_frame, text='Redo', command=self.redo, borderwidth=1, state=tk.DISABLED)
+        self.magnet_button = tk.Button(edit_frame, text='Magnet', command=self.magnet, bd=1)
 
         im = Image.open('settings.png')
         ph = ImageTk.PhotoImage(im, master=self)
@@ -188,6 +207,14 @@ class Window(tk.Tk):
         dash_line_frame = tk.Frame(dash_frame)
         self.line_dz, self.line_dp = tk.Entry(dash_line_frame, width=4), tk.Entry(dash_line_frame, width=4)
 
+        self.bit_title = tk.Label(self.buttons_frame, text='Add bitmap', font=frame_font, bg=frame_c)
+        self.bit_button = tk.Button(self.bit_frame, text='Add BitMap', command=lambda: self.add_special('bit'), bd=1)
+        self.bit_combo = ttk.Combobox(self.bit_frame, width=10, textvariable=self.selected_bm, state='readonly',
+                                      values=self.bitmaps)
+
+        self.usage_button = tk.Button(self.bonus_frame, text='Usage stats', command=self.usage_stats, bd=1)
+        self.github_button = tk.Button(self.bonus_frame, text='Github', command=lambda : webbrowser.open('https://github.com/Ariel4545/draw'), bd=1)
+
         im = Image.open('settings.png')
         ph = ImageTk.PhotoImage(im, master=self)
         self.options_button = tk.Button(self.buttons_frame, image=ph, command=self.options, relief='flat')
@@ -207,10 +234,11 @@ class Window(tk.Tk):
         self.placing_modes = {'drag': hold_move, 'straight': straight, 'centered': from_same}
         self.buttons_list = (draw, eraser, pencil, square_draw, round_draw, color_button, second_color, deafult_bg,
                              save_image, upload_image, erase_canvas, self.add_text, options_button, self.hover_button,
-                             undo, self.redo_button, hold_move, straight, from_same)
-        self.text_list = draw_erase_title, lines_title, shapes_title, color_title, file_title, self.cords_label, sizes_title, write_title, edit_title, ashape_title, dash_title, dash_shape_title, dash_line_title, self.closest_item
+                             undo, self.redo_button, hold_move, straight, from_same, self.magnet_button, self.change_colorb,
+                             self.bit_button, self.usage_button, self.github_button)
+        self.text_list = draw_erase_title, lines_title, shapes_title, color_title, file_title, self.cords_label, sizes_title, write_title, edit_title, ashape_title, dash_title, dash_shape_title, dash_line_title, self.closest_item, self.bit_title
         self.fgbg_list = self.buttons_list + self.text_list
-        self.frames = self.buttons_frame, self.canvas_frame, bottom_frame, width_size_frame, dash_shape_frame, dash_line_frame
+        self.frames = self.buttons_frame, self.canvas_frame, bottom_frame, width_size_frame, dash_shape_frame, dash_line_frame, self.bit_frame, self.bonus_frame
 
 
         # activate UI
@@ -244,13 +272,18 @@ class Window(tk.Tk):
         self.font_combo.current(fonts.index('Arial'))
         self.shapes_combo.bind('<<ComboboxSelected>>', self.update_shape_ui)
         self.bind('<F11>', self.fullscreen)
+        
+        self.add_special_buttons = {'text': self.add_text, 'bit': self.bit_button, 'shape': self.shape_button,
+                                    'magnet': self.magnet_button}
 
         # function calling
+        self.effective_size()
         self.set_width()
         self.draw_erase()
         self.draw_tool()
         self.line_placing(self.points_mode.get())
         self.update_mp()
+        Thread(target=self.stopwatch, daemon=True).start()
 
         # aditional
         self.scroll = ttk.Scrollbar(self.canvas_frame, orient='horizontal')
@@ -315,6 +348,7 @@ class Window(tk.Tk):
         self.edit_menu.add_cascade(label='Erase canvas', command=lambda: self.erase_all)
         self.edit_menu.add_cascade(label='Undo', command=self.undo)
         self.edit_menu.add_cascade(label='Redo', command=self.redo, state=tk.DISABLED)
+        self.edit_menu.add_cascade(label='Magnet', command=self.magnet)
 
     def set_width(self):
         if self.current_mode == 'draw':
@@ -338,11 +372,15 @@ class Window(tk.Tk):
         self.output_shape_var.set(tool)
         self.pen_type.set(tool)
         self.button_mannagment(tool)
+        if self.last_mode in ('draw', 'erase') and (self.add_mode or self.magnet_var.get()) and self.last_active:
+            self.deactivate(self.last_active)
 
     def draw_erase(self, mode='draw'):
         self.output_mode_var.set(mode)
         if self.add_mode:
             self.deactivate(mode=self.add_mode)
+        if self.magnet_var.get():
+            self.deactivate(mode='magnet')
         self.hover_mouse(False)
         self.unbind('<ButtonRelease-1>')
         self.line_placing(self.points_mode.get())
@@ -382,21 +420,27 @@ class Window(tk.Tk):
         if file_name:
             self.canvas.postscript(file=file_name, colormode='color')
             if self.ps_mode.get() == 'pdf':
-                process = subprocess.Popen(['ps2pdf', 'tmp.ps', 'result.pdf'], shell=True)
-                process.wait()
-                os.remove(file_name)
+                try:
+                    process = subprocess.Popen(['ps2pdf', 'tmp.ps', 'result.pdf'], shell=True)
+                    process.wait()
+                    os.remove(file_name)
+                except FileNotFoundError:
+                    messagebox.showerror('Error', 'ps2pdf not found. Please install it to save as PDF.')
 
     def upload(self):
         global img_array, image, image_tk
         # load image into the canvas
         self.convert_image = filedialog.askopenfilename()
         if self.convert_image:
-            image = Image.open(self.convert_image)
-            image_tk = PhotoImage(file=self.convert_image)
-            image_x = (self.canvas.winfo_width() // 2) - (image.width // 2)
-            image_y = (self.canvas.winfo_height() // 2) - (image.height // 2)
-            canvas_image = self.canvas.create_image(image_x, image_y, image=image_tk, anchor=tk.NW)
-            self.images_list.append(canvas_image)
+            try:
+                image = Image.open(self.convert_image)
+                image_tk = PhotoImage(file=self.convert_image)
+                image_x = (self.canvas.winfo_width() // 2) - (image.width // 2)
+                image_y = (self.canvas.winfo_height() // 2) - (image.height // 2)
+                canvas_image = self.canvas.create_image(image_x, image_y, image=image_tk, anchor=tk.NW)
+                self.images_list.append(canvas_image)
+            except (UnidentifiedImageError, OSError):
+                messagebox.showerror('Error', 'Could not open image file.')
 
 
     def undo(self, event=None, custom_index=-1):
@@ -569,15 +613,20 @@ class Window(tk.Tk):
         if self.current_mode == 'draw':
             size = self.output_size.get()
             drawt_list = list(map(int, list(self.draw_size_box['values'])))
-            self.draw_current = drawt_list.index(size)
-            self.draw_size_box.current(drawt_list.index(size))
+            try:
+                self.draw_current = drawt_list.index(size)
+                self.draw_size_box.current(drawt_list.index(size))
+            except ValueError:
+                pass
         elif self.current_mode == 'erase':
 
             size = self.eraser_size.get()
             eraser_list = list(map(int, list(self.erase_size_box['values'])))
-
-            self.eraser_current = eraser_list.index(size)
-            self.erase_size_box.current(eraser_list.index(size))
+            try:
+                self.eraser_current = eraser_list.index(size)
+                self.erase_size_box.current(eraser_list.index(size))
+            except ValueError:
+                pass
 
         # global size var for both erase and draw, bnecause erase it's hust a draw with different color and variables
         self.tool_width.set(size)
@@ -644,126 +693,18 @@ class Window(tk.Tk):
             self.canvas.delete('all')
 
     def add_special(self, mode='text'):
-        def active(event=None, mode='text'):
-            if mode == 'text':
-                self.canvas.create_text(self.x, self.y, text=text,
-                                        font=(self.font_var.get(), self.size_var.get(), self.typeface_var.get()),
-                                        fill=self.paint_color.get(), angle=self.text_angle_var.get())
-                if self.text_once.get():
-                    self.deactivate(mode=mode)
-
-            elif mode == 'shape':
-                d_size, d_space, d_tup = (self.shape_dz.get()), (self.shape_dp.get()), ()
-                if isinstance(d_size, str) and d_size.isdigit(): d_size = int(d_size)
-                if isinstance(d_space, str) and d_space.isdigit(): d_space = int(d_space)
-                if isinstance(d_space, int) and isinstance(d_size, int): d_tup = (d_size, d_space)
-
-                width = int(self.shapes_width.get())
-                size = (self.shapes_size.get())
-                if size:
-                    if size.isdigit():
-                        size = int(size)
-                        p_x, p_y, sq_x, sq_y = self.p_x - size // 2,  self.p_y - size // 2, self.sq_x + size // 2, self.sq_y + size // 2
-                        if self.shape_var.get() == 'rectangle':
-                            # ratio between x and y (in favor of x)
-                            ratio = float(self.xy_var.get())
-                            xr, yr = ratio, 1 - ratio
-                            p_x, p_y, sq_x, sq_y = self.p_x - size // (4*xr), self.p_y - size // (4*yr), self.sq_x + size // (4*xr), self.sq_y + size // (4*yr)
-
-
-                if self.shape_var.get() == 'circle':
-                    self.canvas.create_oval(p_x, p_y, sq_x, sq_y, fill=self.paint_color.get(), outline=self.paint_second_color.get(), width=width, dash=d_tup)
-                elif self.shape_var.get() in ('rectangle', 'square'):
-                    self.canvas.create_rectangle(p_x, p_y, sq_x, sq_y, fill=self.paint_color.get(),
-                                                 outline=self.paint_second_color.get(), width=width, dash=d_tup)
-                elif self.shape_var.get() in ('arc', 'chord', 'pieslice'):
-                    sdegree, sextend = 0, 90
-                    if self.start_degree_box.get():
-                        if self.start_degree_box.get().isdigit():
-                            sdegree = self.start_degree_box.get()
-                    if self.arc_extent.get():
-                        if self.arc_extent.get().isdigit():
-                            sextend = self.arc_extent.get()
-
-                    self.canvas.create_arc(p_x, p_y, sq_x, sq_y, fill=self.paint_color.get(), start=sdegree, dash=d_tup,
-                                           outline=self.paint_second_color.get(), width=width, style=self.shape_var.get(), extent=sextend)
-                elif self.shape_var.get() in ('tringle', 'pentagon', 'right triangle', 'hexagon', 'octagon'):
-                    x_mid = (p_x + sq_x) // 2  # base mid
-                    x_dis = (sq_x - p_x)  # base len
-
-                    half_s = x_mid - p_x
-                    shape_s = half_s * 2
-                    if self.shape_var.get() == 'tringle':
-                        tringle_x = (p_x+sq_x) // 2
-                        if self.direction_var.get() == 'Bottom':
-                            dir_tuple = p_x, p_y, sq_x , p_y, tringle_x, sq_y
-                        else:
-                            dir_tuple = p_x, sq_y, sq_x, sq_y, tringle_x, p_y
-                    elif self.shape_var.get() == 'pentagon':
-                        if self.direction_var.get() == 'Top':
-                            dir_tuple =  (sq_x - (shape_s * 0.75), sq_y, p_x + (shape_s * 0.75), sq_y
-                                         , sq_x, (sq_y + p_y) // 2,
-
-                                (p_x + sq_x) // 2, p_y, p_x, (sq_y + p_y) // 2)
-                        else:
-                            dir_tuple = (sq_x - (shape_s * 0.75), p_y, p_x + (shape_s * 0.75), p_y
-                                         , sq_x, (sq_y + p_y) // 2,
-
-                                         (p_x + sq_x) // 2, sq_y, p_x, (sq_y + p_y) // 2)
-
-                        #                         dir_tuple = ((p_x + sq_x) // 1.25, sq_y, (sq_x + p_x) // 1.75, sq_y
-
-                    elif self.shape_var.get() == 'hexagon':
-                        dir_tuple = (sq_x - (shape_s * 0.8), sq_y, p_x + (shape_s * 0.8), sq_y
-                                     , sq_x, (sq_y + p_y) // 2, p_x + (shape_s * 0.8), p_y, sq_x - (shape_s * 0.8),
-                                     p_y,
-
-                                       p_x, (sq_y + p_y) // 2)
-
-                    elif self.shape_var.get() == 'octagon':
-                        mid_y_t = sq_y - (shape_s * 0.7)
-                        mid_y_b = sq_y - (shape_s * 0.3)
-                        left_base, right_base = sq_x - (shape_s * 0.7), p_x + (shape_s * 0.7),
-                        dir_tuple = (left_base, sq_y, right_base, sq_y #  bottom base
-                        , sq_x, mid_y_b, sq_x, mid_y_t  # right side
-                         ,right_base ,p_y, left_base, p_y # top base
-                        , p_x, p_y + (shape_s * 0.3), p_x, mid_y_b,  # left side
-                         left_base, sq_y) # connection
-
-                    elif self.shape_var.get() == 'right triangle':
-                        if self.direction_var.get() == 'Right top':
-                            dir_tuple = (p_x, sq_y, sq_x, sq_y
-                                                       , sq_x , p_y)
-                        elif self.direction_var.get() == 'Right bottom':
-                            dir_tuple = (p_x, p_y, sq_x, p_y, sq_x, sq_y)
-                        elif self.direction_var.get() == 'Left bottom':
-                            dir_tuple = (sq_x, p_y, p_x, p_y
-                                         , p_x, sq_y)
-                        elif self.direction_var.get() == 'Left top':
-                            dir_tuple = (sq_x, sq_y, p_x, sq_y, p_x, p_y)
-
-
-                    else:
-                        dir_tuple = self.poly_points
-                        self.poly_points = []
-                        self.regular_shapes()
-
-                    self.canvas.create_polygon(dir_tuple, fill=self.paint_color.get(),
-                                               outline=self.paint_second_color.get(), width=width)
-
-
-
-                if self.shape_once.get():
-                    self.deactivate(mode=mode)
-
-
+        self.last_active, self.text_msg = mode, ''
         proceed = False
         if mode == 'text':
-            text = tk.simpledialog.askstring('Egon draw', 'Enter the text')
-            if text:
+            self.text_msg = tk.simpledialog.askstring('Egon draw', 'Enter the text')
+            if self.text_msg:
                 self.add_mode = 'text'
                 self.add_text.configure(bg='grey', text='Edit text')
                 proceed = True
+        elif mode == 'bit':
+            proceed = True
+            self.bit_button.configure(bg='grey')
+            self.add_mode = 'bit'
         else:
             if self.shape_var.get():
                 self.add_mode = 'shape'
@@ -775,15 +716,148 @@ class Window(tk.Tk):
             self.current_mode = 'hover'
             self.canvas.configure(cursor='center_ptr')
             self.button_mannagment('hover')
-            self.canvas.bind('<ButtonRelease-1>', lambda e: active(mode=mode))
+            self.canvas.bind('<ButtonRelease-1>', lambda e: self.active_add(mode=mode))
             self.canvas.unbind('<B1-Motion>')
-            self.bind('<Escape>', self.deactivate)
+            self.bind('<Escape>', lambda e: self.deactivate(mode=mode))
+
+    def active_add(self, event=None, mode='text'):
+        if mode == 'text':
+            if self.text_msg:
+                self.canvas.create_text(self.x, self.y, text=self.text_msg,
+                                        font=(self.font_var.get(), self.size_var.get(), self.typeface_var.get()),
+                                        fill=self.paint_color.get(), angle=self.text_angle_var.get())
+                if self.text_once.get():
+                    self.deactivate(mode=mode)
+
+        elif mode == 'shape':
+            d_size, d_space, d_tup = (self.shape_dz.get()), (self.shape_dp.get()), ()
+            if isinstance(d_size, str) and d_size.isdigit(): d_size = int(d_size)
+            if isinstance(d_space, str) and d_space.isdigit(): d_space = int(d_space)
+            if isinstance(d_space, int) and isinstance(d_size, int): d_tup = (d_size, d_space)
+
+            width = int(self.shapes_width.get())
+            size = (self.shapes_size.get())
+            if size:
+                if size.isdigit():
+                    size = int(size)
+                    p_x, p_y, sq_x, sq_y = self.p_x - size // 2,  self.p_y - size // 2, self.sq_x + size // 2, self.sq_y + size // 2
+                    if self.shape_var.get() == 'rectangle':
+                        # ratio between x and y (in favor of x)
+                        ratio = float(self.xy_var.get())
+                        xr, yr = ratio, 1 - ratio
+                        p_x, p_y, sq_x, sq_y = self.p_x - size // (4*xr), self.p_y - size // (4*yr), self.sq_x + size // (4*xr), self.sq_y + size // (4*yr)
+
+
+            if self.shape_var.get() == 'circle':
+                self.canvas.create_oval(p_x, p_y, sq_x, sq_y, fill=self.paint_color.get(), outline=self.paint_second_color.get(), width=width, dash=d_tup)
+            elif self.shape_var.get() in ('rectangle', 'square'):
+                self.canvas.create_rectangle(p_x, p_y, sq_x, sq_y, fill=self.paint_color.get(),
+                                             outline=self.paint_second_color.get(), width=width, dash=d_tup)
+            elif self.shape_var.get() in ('arc', 'chord', 'pieslice'):
+                sdegree, sextend = 0, 90
+                if self.start_degree_box.get():
+                    if self.start_degree_box.get().isdigit():
+                        sdegree = self.start_degree_box.get()
+                if self.arc_extent.get():
+                    if self.arc_extent.get().isdigit():
+                        sextend = self.arc_extent.get()
+
+                self.canvas.create_arc(p_x, p_y, sq_x, sq_y, fill=self.paint_color.get(), start=sdegree, dash=d_tup,
+                                       outline=self.paint_second_color.get(), width=width, style=self.shape_var.get(), extent=sextend)
+            elif self.shape_var.get() in ('tringle', 'pentagon', 'right triangle', 'hexagon', 'octagon'):
+                x_mid = (p_x + sq_x) // 2  # base mid
+                x_dis = (sq_x - p_x)  # base len
+
+                half_s = x_mid - p_x
+                shape_s = half_s * 2
+                if self.shape_var.get() == 'tringle':
+                    tringle_x = (p_x+sq_x) // 2
+                    if self.direction_var.get() == 'Bottom':
+                        dir_tuple = p_x, p_y, sq_x , p_y, tringle_x, sq_y
+                    else:
+                        dir_tuple = p_x, sq_y, sq_x, sq_y, tringle_x, p_y
+                elif self.shape_var.get() == 'pentagon':
+                    if self.direction_var.get() == 'Top':
+                        dir_tuple =  (sq_x - (shape_s * 0.75), sq_y, p_x + (shape_s * 0.75), sq_y
+                                     , sq_x, (sq_y + p_y) // 2,
+
+                            (p_x + sq_x) // 2, p_y, p_x, (sq_y + p_y) // 2)
+                    else:
+                        dir_tuple = (sq_x - (shape_s * 0.75), p_y, p_x + (shape_s * 0.75), p_y
+                                     , sq_x, (sq_y + p_y) // 2,
+
+                                     (p_x + sq_x) // 2, sq_y, p_x, (sq_y + p_y) // 2)
+
+                    #                         dir_tuple = ((p_x + sq_x) // 1.25, sq_y, (sq_x + p_x) // 1.75, sq_y
+
+                elif self.shape_var.get() == 'hexagon':
+                    dir_tuple = (sq_x - (shape_s * 0.8), sq_y, p_x + (shape_s * 0.8), sq_y
+                                 , sq_x, (sq_y + p_y) // 2, p_x + (shape_s * 0.8), p_y, sq_x - (shape_s * 0.8),
+                                 p_y,
+
+                                   p_x, (sq_y + p_y) // 2)
+
+                elif self.shape_var.get() == 'octagon':
+                    mid_y_t = sq_y - (shape_s * 0.7)
+                    mid_y_b = sq_y - (shape_s * 0.3)
+                    left_base, right_base = sq_x - (shape_s * 0.7), p_x + (shape_s * 0.7),
+                    dir_tuple = (left_base, sq_y, right_base, sq_y #  bottom base
+                    , sq_x, mid_y_b, sq_x, mid_y_t  # right side
+                     ,right_base ,p_y, left_base, p_y # top base
+                    , p_x, p_y + (shape_s * 0.3), p_x, mid_y_b,  # left side
+                     left_base, sq_y) # connection
+
+                elif self.shape_var.get() == 'right triangle':
+                    if self.direction_var.get() == 'Right top':
+                        dir_tuple = (p_x, sq_y, sq_x, sq_y
+                                                   , sq_x , p_y)
+                    elif self.direction_var.get() == 'Right bottom':
+                        dir_tuple = (p_x, p_y, sq_x, p_y, sq_x, sq_y)
+                    elif self.direction_var.get() == 'Left bottom':
+                        dir_tuple = (sq_x, p_y, p_x, p_y
+                                     , p_x, sq_y)
+                    elif self.direction_var.get() == 'Left top':
+                        dir_tuple = (sq_x, sq_y, p_x, sq_y, p_x, p_y)
+
+
+                else:
+                    dir_tuple = self.poly_points
+                    self.poly_points = []
+                    self.regular_shapes()
+
+                self.canvas.create_polygon(dir_tuple, fill=self.paint_color.get(),
+                                           outline=self.paint_second_color.get(), width=width)
+
+
+
+            if self.shape_once.get():
+                self.deactivate(mode=mode)
+        
+        elif mode == 'bit':
+            mid_x, mid_y = (self.sq_x + self.p_x) // 2, (self.sq_y + self.p_y) // 2
+            self.canvas.create_bitmap(mid_x, mid_y, bitmap=self.selected_bm.get())
+            if self.bit_once.get():
+                self.deactivate(mode=mode)
 
     def deactivate(self, event=None, mode='text', regular=True):
         # deacrivate special addition mode (text for now)
-        self.add_mode = False
+        self.add_mode, self.last_active = False, ''
         if mode == 'text':
             self.add_text.configure(bg='SystemButtonFace', text='Add text')
+        elif mode == 'bit':
+            self.bit_button.configure(bg=self.predefined_bg)
+        elif mode == 'magnet':
+            self.unbind('<Left>'), self.unbind('<Right>'), self.unbind('<Up>'), self.unbind('<Down>')
+            self.bind('<Left>', lambda e: self.move_paint(key='left'))
+            self.bind('<Right>', lambda e: self.move_paint(key='right'))
+            self.bind('<Up>', lambda e: self.move_paint(key='up'))
+            self.bind('<Down>', lambda e: self.move_paint(key='down'))
+
+            self.unbind('<B1-Motion>')
+            self.canvas.bind('<B1-Motion>', self.paint)
+
+            self.magnet_var.set(False)
+            self.magnet_button.configure(bg=self.predefined_bg)
         else:
             self.shape_button.configure(bg=self.predefined_bg)
         self.current_mode = self.last_mode
@@ -867,8 +941,8 @@ class Window(tk.Tk):
         option_root.resizable(False, False)
         op_font = 'arial 10 bold'
 
-        titles = 'Change transparency', 'App colors', 'UI mode', 'Change reliefs', 'Others', 'Dots options', 'Scroll bars', 'Move paint', 'Special save', 'Lines',
-        transparency_title, colors_title, ui_mode, relief_title, others_title, dotted_line_title, scroll_bars_title, mp_title, sp_title, ln_title = [
+        titles = 'Change transparency', 'App colors', 'UI mode', 'Change reliefs', 'Others', 'Dots options', 'Scroll bars', 'Move paint', 'Special save', 'Lines', 'Bitmap'
+        transparency_title, colors_title, ui_mode, relief_title, others_title, dotted_line_title, scroll_bars_title, mp_title, sp_title, ln_title, bm_title = [
             tk.Label(option_root, text=t, font=op_font) for t in titles]
         # UI's transparency
         transparency_bar = ttk.Scale(option_root, from_=10, to=100, orient='horizontal', command=change_transparency,
@@ -934,6 +1008,11 @@ class Window(tk.Tk):
         shape_once_combo = tk.Checkbutton(singular_frame, variable=self.shape_once, text='Singular shape')
         last_frame = tk.Frame(option_root)
         skip_clear_w = tk.Checkbutton(last_frame, variable=self.erase_skipw, text='Erase canvas warning')
+        
+        bitmap_frame = tk.Frame(option_root)
+        add_bitmap_check = tk.Checkbutton(bitmap_frame, variable=self.bitmap_active, text='Enable',
+                                          command=self.bitmap_mode)
+        singular_bit = tk.Checkbutton(bitmap_frame, variable=self.bit_once, text='One at a time')
 
 
         # confine
@@ -969,21 +1048,29 @@ class Window(tk.Tk):
         ps_frame.grid(row=28, column=1)
         ps_radio.grid(row=0, column=0)
         pdf_radio.grid(row=0, column=2)
+        
+        bm_title.grid(row=29, column=1)
+        bitmap_frame.grid(row=30, column=1)
+        add_bitmap_check.grid(row=0, column=0)
+        singular_bit.grid(row=0, column=2)
 
 
-        others_title.grid(row=29, column=1)
-        singular_frame.grid(row=30, column=1), text_once_combo.grid(row=0, column=0), shape_once_combo.grid(row=0,column=2)
-        last_frame.grid(row=31, column=1)
+        others_title.grid(row=31, column=1)
+        singular_frame.grid(row=32, column=1), text_once_combo.grid(row=0, column=0), shape_once_combo.grid(row=0,column=2)
+        last_frame.grid(row=33, column=1)
         skip_clear_w.grid(row=0, column=0)
 
         relief_combo_c.bind('<<ComboboxSelected>>', lambda event: change_reliefs())
         relief_combo_v.bind('<<ComboboxSelected>>', lambda event: change_reliefs())
         self.inc_hrz.bind('<KeyRelease>', self.update_inc), self.inc_vrt.bind('<KeyRelease>', self.update_inc)
 
-    def hover_mouse(self, activate=True):
+    def hover_mouse(self, activate=True, slm=False):
 
         if self.add_mode:
             self.deactivate(mode=self.add_mode, regular=False)
+        
+        if slm:
+            self.last_mode = self.current_mode
 
         # neutral that doesn't do anything, and lets you use your mouse in the canvas without worries
         if activate:
@@ -1003,22 +1090,23 @@ class Window(tk.Tk):
     def identify_item(self, event=None):
         cords_msg, color_msg, group_ = '', '', ''
         self.close_item = self.canvas.find_closest(self.x, self.y)
-        self.item_type = self.canvas.type(self.close_item)
-        color = self.canvas.itemcget(self.close_item, 'fill')
-        color_msg = f' | {self.item_type}\'s color:{color}'
-        if self.item_type  == 'line':
-            for group in self.line_groups:
-                if self.close_item[0] in group:
-                    group_ = group
-                if group_:
-                    start, end = self.canvas.coords(group_[0]), self.canvas.coords(group_[-1])
-                    cords_msg = f' | Starting pos:{start}, Ending pos:{end}'
-        else:
-            if self.item_type != 'text':
-                secondary_color = self.canvas.itemcget(self.close_item, 'outline')
-                if secondary_color != color:
-                    color_msg = f' | {self.item_type}\'s fill color:{color}, {self.item_type}\'s outline color:{secondary_color}'
-        self.closest_item.configure(text=f'Closest item: {self.item_type}{color_msg}{cords_msg}')
+        if self.close_item:
+            self.item_type = self.canvas.type(self.close_item)
+            color = self.canvas.itemcget(self.close_item, 'fill')
+            color_msg = f' | {self.item_type}\'s color:{color}'
+            if self.item_type  == 'line':
+                for group in self.line_groups:
+                    if self.close_item[0] in group:
+                        group_ = group
+                    if group_:
+                        start, end = self.canvas.coords(group_[0]), self.canvas.coords(group_[-1])
+                        cords_msg = f' | Starting pos:{start}, Ending pos:{end}'
+            else:
+                if self.item_type != 'text':
+                    secondary_color = self.canvas.itemcget(self.close_item, 'outline')
+                    if secondary_color != color:
+                        color_msg = f' | {self.item_type}\'s fill color:{color}, {self.item_type}\'s outline color:{secondary_color}'
+            self.closest_item.configure(text=f'Closest item: {self.item_type}{color_msg}{cords_msg}')
 
     def update_shape_ui(self, event):
         # with mode we adding widget that certain shapes need, and with the last mode we remove those who aren't necessary anymore
@@ -1083,11 +1171,12 @@ class Window(tk.Tk):
         (draw_erase_frame, shapes_frame, color_frame, file_frame, sizes_frame, write_frame, edit_frame, ashape_frame,
          lines_frame, dash_frame) = self.topframes
         (draw_erase_title, lines_title, shapes_title, color_title, file_title, self.cords_label, sizes_title, write_title, edit_title,
-         ashape_title, dash_title, dash_shape_title, dash_line_title, self.closest_item) = self.text_list
+         ashape_title, dash_title, dash_shape_title, dash_line_title, self.closest_item, self.bit_title) = self.text_list
         (draw, eraser, pencil, square_draw, round_draw, color_button, second_color, deafult_bg,
                              save_image, upload_image, erase_canvas, self.add_text, options_button, self.hover_button,
-                             undo, self.redo_button, hold_move, straight, from_same) = self.buttons_list
-        self.buttons_frame, self.canvas_frame, bottom_frame, width_size_frame, dash_shape_frame, dash_line_frame = self.frames
+                             undo, self.redo_button, hold_move, straight, from_same, self.magnet_button, self.change_colorb,
+                             self.bit_button, self.usage_button, self.github_button) = self.buttons_list
+        self.buttons_frame, self.canvas_frame, bottom_frame, width_size_frame, dash_shape_frame, dash_line_frame, self.bit_frame, self.bonus_frame = self.frames
 
 
         self.buttons_frame.pack_forget()
@@ -1129,6 +1218,7 @@ class Window(tk.Tk):
             color_button.pack(pady=1)
             second_color.pack(pady=1)
             deafult_bg.pack(pady=1)
+            self.change_colorb.pack(pady=1)
 
             file_title.grid(row=0, column=5)
             file_frame.grid(row=1, column=5, padx=2)
@@ -1148,6 +1238,7 @@ class Window(tk.Tk):
             erase_canvas.pack(pady=1)
             undo.pack(pady=1)
             self.redo_button.pack(pady=1)
+            self.magnet_button.pack(pady=1)
 
             ashape_title.grid(row=0, column=8)
             ashape_frame.grid(row=1, column=8, padx=3)
@@ -1163,14 +1254,205 @@ class Window(tk.Tk):
             self.shape_dz.grid(row=0, column=0, padx=1), self.shape_dp.grid(row=0, column=2, padx=1)
             dash_line_title.pack(), dash_line_frame.pack()
             self.line_dz.grid(row=0, column=0, padx=1), self.line_dp.grid(row=0, column=2, padx=1)
+            
+            self.bit_button.pack(pady=8)
+            self.bit_combo.pack(pady=8)
 
             options_button.grid(row=1, column=11, padx=3)
+            
+            self.bonus_frame.grid(row=1, column=12)
+            self.usage_button.grid(row=0, column=0, padx=3, pady=5)
+            self.github_button.grid(row=1, column=0, padx=3, pady=5)
 
         elif self.plc_mode.get() == 'menus':
             self.canvas_frame.pack(expand=True, fill=tk.BOTH)
             bottom_frame.pack()
             self.config(menu=self.app_menu)
 
+    def magnet(self):
+        if not(self.magnet_var.get()):
+            self.hover_mouse()
+            self.canvas.configure(cursor='fleur')
+            self.unbind('<B1-Motion>')
+            self.bind('<B1-Motion>', self.move_magnet)
+            self.unbind('<Left>'), self.unbind('<Right>'), self.unbind('<Up>'), self.unbind('<Down>')
+            self.bind('<Left>', lambda e: self.move_magnet(event='left'))
+            self.bind('<Right>', lambda e: self.move_magnet(event='right'))
+            self.bind('<Up>', lambda e: self.move_magnet(event='up'))
+            self.bind('<Down>', lambda e: self.move_magnet(event='down'))
+            self.magnet_button.configure(bg='light grey')
+            self.last_active = 'magnet'
+
+        else:
+            self.deactivate(mode='magnet')
+
+        self.magnet_var.set(not (self.magnet_var.get()))
+
+    def move_magnet(self, event=None):
+        closest_item = self.canvas.find_closest(self.x, self.y)
+        if isinstance(event, str):
+            self.magnet_x, self.magnet_y = self.move_dict[event]
+        else:
+            # if event.type == tk.EventType.ButtonPress:
+            self.refrence_point = event.x, event.y
+            x1, y1, x2, y2 = self.canvas.coords(closest_item)
+            # conidition to check which is closer
+            # item_x, item_y = [x if x1 - self.refrence_point[0] < x2 - self.refrence_point[0] ]
+            item_x, item_y = (x1 + x2) // 2, (y1 + y2) // 2
+            self.magnet_x, self.magnet_y = self.refrence_point[0] - item_x, self.refrence_point[1] - item_y
+        self.canvas.move(closest_item, self.magnet_x, self.magnet_y)
+
+    def change_color(self):
+
+        def activation(event):
+            closest_item = self.canvas.find_closest(event.x, event.y)
+            group = (closest_item,)
+            print(group)
+            if self.canvas.type(closest_item) == 'line':
+                for line_group in self.line_groups:
+                    if group[0][0] in line_group:
+                        group = line_group
+                        break
+
+            selected_color = colorchooser.askcolor(title='Select a color')
+            if selected_color:
+                for item in group:
+                    self.canvas.itemconfig(item, fill=selected_color[1])
+
+            if self.deactivate_color.get():
+                deactivation()
+
+        def deactivation():
+            self.change_colorb['bg'] = 'SystemButtonFace'
+            self.unbind('<B1-Motion>')
+            if not self.last_mode == 'hover':
+                self.draw_erase(self.last_mode)
+
+        self.hover_mouse(slm=True)
+        self.canvas['cursor'] = 'spraycan'
+        self.change_colorb['bg'] = 'light grey'
+        self.bind('<ButtonRelease-1>', activation)
+
+    def bitmap_mode(self):
+        if self.bitmap_active.get():
+            self.bit_title.grid(row=0, column=10)
+            self.bit_frame.grid(row=1, column=10)
+        else:
+            self.bit_title.grid_forget()
+            self.bit_frame.grid_forget()
+
+    def usage_stats(self):
+
+        def save_file():
+            dir_name = 'Draw_usage_report'
+            if not os.path.exists(dir_name):
+                os.makedirs(dir_name)
+            now = datetime.now()
+            with open(os.path.join(dir_name, f'{now.strftime("%Y-%m-%d_%H-%M-%S")}.txt'), 'w') as f:
+                    for line in text_list:
+                        f.write(line + '\n')
+
+        def close_us():
+            self.us_active = False
+            usage_root.destroy()
+
+        usage_root = tk.Toplevel()
+        usage_root.title('Usage stats')
+        usage_root.resizable(False, False)
+        usage_root.protocol('WM_DELETE_WINDOW', close_us)
+        self.us_active = True
+
+        title = tk.Label(usage_root, text='Usage statistics', font='Arial 12 bold')
+
+
+        most_used_tool = max(self.time_dict.items(), key=operator.itemgetter(1))
+
+
+        # way to include also the deleted ones
+        lines_drawn = len(self.line_groups)
+        # add a list of placed shapes like you have for lines
+        # shapes_placed = len(self.shapes_group) # shapes_group not implemented in github version yet, skipping
+        # text_placed = len(self.text_group) # text_group not implemented
+
+        color_list = []
+        for i in self.canvas.find_all():
+            if not(self.canvas.type(i) == 'bitmap'):
+                color_list.append(self.canvas.itemcget(i, 'fill'))
+        if color_list:
+            most_used_color = max(set(color_list), key=color_list.count)
+        else:
+            most_used_color = 'None'
+
+        # text saved as variables to ease the saving process (if needed)
+        mut_text = f'Most used tool {most_used_tool[0]}, estimated time {most_used_tool[1]}'
+        muc_text = f'Most used color {most_used_color}'
+        ld_text = f'Lines drawn {lines_drawn}'
+        # sp_text = f'Shapes placed {shapes_placed}'
+        # te_text = f'Text placed {text_placed}'
+        text_list = [mut_text, ld_text]
+
+        most_used_frame = tk.Frame(usage_root, bd=1, relief='ridge')
+        itemp_frame = tk.Frame(usage_root, bd=1, relief='ridge')
+
+        self.usage_time = tk.Label(usage_root)
+        most_used_title = tk.Label(usage_root, text='Most used', font='Arial 11 underline')
+        self.mut_label = tk.Label(most_used_frame, text=mut_text)
+        muc_label = tk.Label(most_used_frame, text=muc_text)
+        item_placed_title = tk.Label(usage_root, text='Placed Items', font='Arial 11 underline')
+        ld_label = tk.Label(itemp_frame, text=ld_text)
+        save_button = tk.Button(usage_root, text='Save', command=save_file)
+
+
+        title.pack()
+
+        most_used_title.pack()
+        most_used_frame.pack(pady=3, padx=5)
+        self.mut_label.pack()
+        muc_label.pack()
+
+        item_placed_title.pack()
+        itemp_frame.pack(pady=3, padx=5)
+        ld_label.pack()
+
+        self.usage_time.pack()
+        save_button.pack(pady=3, padx=5)
+
+    def stopwatch(self):
+        self.start_time = time.time()
+        self.start_date = datetime.now().strftime('%Y-%m-%d')
+        self.stt = timedelta(seconds=int(time.time() - self.start_time))
+        while True:
+            time.sleep(0.5)
+            self.ut = timedelta(seconds=int(time.time() - self.start_time))
+            self.time_dict[self.current_mode] += 0.5
+            if self.us_active:
+                self.after(0, self.update_usage_ui)
+
+    def update_usage_ui(self):
+        self.usage_time.configure(text=f'Usage time: {self.ut}')
+        most_used_tool = max(self.time_dict.items(), key=operator.itemgetter(1))
+        try:
+            self.mut_label.configure(text=f'Most used tool {most_used_tool[0]}, estimated time {most_used_tool[1]}')
+        except tk.TclError:
+            pass
+
+    def effective_size(self):
+        self.update_idletasks()
+        # window size & cords
+        str_width = 1250
+        str_height = 830
+        min_width = self.buttons_frame.winfo_width()
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        self.width = round(str_width * (screen_width / 1920))
+        self.height = round(str_height * (screen_height / 1080))
+
+        if min_width > self.width:
+            self.width = min_width
+
+        placement_x = round((screen_width / 2) - (self.width / 2))
+        placement_y = round((screen_height / 2) - (self.height / 2))
+        self.geometry(f'{self.width}x{self.height}+{placement_x}+{placement_y}')
 
 if __name__ == '__main__':
     app = Window()
