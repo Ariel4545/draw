@@ -71,7 +71,7 @@ class Window(tk.Tk):
         self.dot_size, self.dot_space = '', ''
         self.points_mode = tk.StringVar()
         self.points_mode.set('drag')
-        self.main_mods = 'draw', 'erase', 'hover'
+        self.main_mods = 'draw', 'erase', 'hover', 'eyedropper'
         self.line_group, self.line_groups = [], []
         self.connect_fl = tk.BooleanVar()
         # general / otheres
@@ -93,12 +93,15 @@ class Window(tk.Tk):
         self.xy_var.set(0.75)
         self.direction_var = tk.StringVar()
         self.direction_var.set('Top')
-        self.shapes_list = 'circle', 'square', 'arc', 'tringle', 'chord', 'pieslice', 'rectangle', 'pentagon', 'right triangle', 'hexagon', 'octagon'
+        self.shapes_list = 'circle', 'square', 'arc', 'tringle', 'chord', 'pieslice', 'rectangle', 'pentagon', 'right triangle', 'hexagon', 'octagon', 'star', 'heart'
         self.shape_var.set(self.shapes_list[0])
         self.last_smode = 'circle'
 
         # New features variables
         self.magnet_var = tk.BooleanVar()
+        self.grid_active = tk.BooleanVar()
+        self.snap_to_grid = tk.BooleanVar()
+        self.grid_spacing = 50
         self.bitmaps = ['error', 'gray75', 'gray50', 'gray25', 'gray12', 'hourglass', 'info', 'questhead', 'question', 'warning']
         self.selected_bm = tk.StringVar()
         self.selected_bm.set(self.bitmaps[0])
@@ -109,6 +112,7 @@ class Window(tk.Tk):
         self.last_active = ''
         self.deactivate_color = tk.BooleanVar()
         self.mp_x, self.mp_y = 0, 0
+        self.undo_count, self.redo_count, self.clear_count = 0, 0, 0
 
         # menus varibales
         self.output_mode_var = tk.StringVar()
@@ -126,10 +130,26 @@ class Window(tk.Tk):
 
         # window widgets
         frame_font = 'arial 8 underline'
+        
+        # Initialize Hints Dictionary
+        self.tool_hints = {
+            'line': 'Click and drag to draw freehand lines.',
+            'erase': 'Click and drag to erase objects.',
+            'square': 'Click and drag to draw a rectangle.',
+            'round': 'Click and drag to draw an oval.',
+            'diamond': 'Click and drag to draw a polygon.',
+            'hover': 'Hover over objects to see properties. Click to select.',
+            'drag': 'Click and drag to move the view.',
+            'straight': 'Click start and end points for straight lines.',
+            'centered': 'Click center point, then drag out.',
+            'text': 'Click anywhere to add text.',
+            'bit': 'Click to place the bitmap.',
+            'shape': 'Click and drag to place the shape.'
+        }
 
         self.buttons_frame = tk.Frame(self)
         self.canvas_frame = tk.Frame(self)
-        bottom_frame = tk.Frame(self)
+        self.status_bar = ttk.Frame(self, relief='sunken')
         self.canvas = tk.Canvas(self.canvas_frame, cursor='pencil', bd=1, bg='white')
 
         title_list = 'Select mode', 'Lines output', 'Select shape', 'Select colors', 'File management', 'Select sizes', 'Write', 'Edit', 'Add shape', 'Dash Size/Space'
@@ -156,6 +176,7 @@ class Window(tk.Tk):
         square_draw = tk.Button(shapes_frame, text='Marker', command=lambda: self.draw_tool('square'),
                                      borderwidth=1)
         round_draw = tk.Button(shapes_frame, text='Pen', command=lambda: self.draw_tool('round'), borderwidth=1)
+        diamond_draw = tk.Button(shapes_frame, text='Brush', command=lambda: self.draw_tool('diamond'), borderwidth=1)
 
         self.draw_size_box = ttk.Combobox(sizes_frame, width=5, textvariable=self.output_size, state='normal')
         self.erase_size_box = ttk.Combobox(sizes_frame, width=5, textvariable=self.eraser_size, state='normal')
@@ -165,6 +186,7 @@ class Window(tk.Tk):
                                       command=lambda: self.color_select('second'), borderwidth=1)
         deafult_bg = tk.Button(color_frame, text='Canvas color', command=self.canvas_color, bd=1)
         self.change_colorb = tk.Button(color_frame, text='Edit color', command=self.change_color, borderwidth=1)
+        self.eyedropper_button = tk.Button(color_frame, text='Pick Color', command=self.toggle_eyedropper, borderwidth=1)
 
         self.add_text = tk.Button(write_frame, text='Add text', command=self.add_special, borderwidth=1)
         self.font_combo = ttk.Combobox(write_frame, width=15, textvariable=self.font_var, state='readonly',
@@ -184,13 +206,53 @@ class Window(tk.Tk):
         undo = tk.Button(edit_frame, text='Undo', command=self.undo, borderwidth=1)
         self.redo_button = tk.Button(edit_frame, text='Redo', command=self.redo, borderwidth=1, state=tk.DISABLED)
         self.magnet_button = tk.Button(edit_frame, text='Magnet', command=self.magnet, bd=1)
+        self.grid_button = tk.Button(edit_frame, text='Grid', command=self.toggle_grid, bd=1)
 
         im = Image.open('settings.png')
         ph = ImageTk.PhotoImage(im, master=self)
         options_button = tk.Button(self.buttons_frame, image=ph, command=self.options, relief='flat')
         options_button.image = ph
-        self.cords_label = tk.Label(bottom_frame, text='', bd=1, relief='ridge')
-        self.closest_item = tk.Label(bottom_frame, text='', bd=1, relief='ridge')
+        
+        # --- Professional Status Bar ---
+        # Styles
+        self.style.configure('StatusBar.TFrame', background='#f0f0f0')
+        self.style.configure('StatusBar.TLabel', background='#f0f0f0', foreground='black', font=('Segoe UI', 9))
+        
+        self.status_bar = ttk.Frame(self, style='StatusBar.TFrame')
+        
+        # 1. System Status (Left)
+        self.status_label = ttk.Label(self.status_bar, text="Ready", style='StatusBar.TLabel', padding=(10, 2))
+        self.status_label.pack(side='left')
+        
+        # Separator
+        tk.Label(self.status_bar, text="|", bg='#f0f0f0', fg='#a0a0a0', font=('Arial', 12)).pack(side='left', padx=2)
+
+        # 2. Current Tool (Left)
+        self.tool_status = ttk.Label(self.status_bar, text="Tool: Pencil", style='StatusBar.TLabel', padding=(5, 2))
+        self.tool_status.pack(side='left')
+
+        # 3. Size Indicator (Left)
+        self.size_status = ttk.Label(self.status_bar, text="Size: 5px", style='StatusBar.TLabel', padding=(5, 2))
+        self.size_status.pack(side='left')
+
+        # 4. Context Hints (Center - Expands)
+        self.hint_label = ttk.Label(self.status_bar, text="Click and drag to start drawing.", style='StatusBar.TLabel', anchor='center')
+        self.hint_label.pack(side='left', fill='x', expand=True, padx=10)
+
+        # 5. Canvas Info (Right)
+        self.canvas_info = ttk.Label(self.status_bar, text="Size: -- x --", style='StatusBar.TLabel', padding=(5, 2))
+        self.canvas_info.pack(side='right', padx=10)
+
+        # Separator
+        tk.Label(self.status_bar, text="|", bg='#f0f0f0', fg='#a0a0a0', font=('Arial', 12)).pack(side='right', padx=2)
+
+        # 6. Coordinates (Right)
+        self.cords_label = ttk.Label(self.status_bar, text='Ln 1, Col 1', style='StatusBar.TLabel', width=15, anchor='e', padding=(5, 2))
+        self.cords_label.pack(side='right', padx=5)
+
+        # Cleanups
+        self.closest_item = self.hint_label # Reuse hint label for item details if needed, or keep separate.
+
 
         self.shape_button = tk.Button(ashape_frame, text='Add shape', command=lambda: self.add_special('shape'), bd=1)
         self.shapes_combo = ttk.Combobox(ashape_frame, width=10, textvariable=self.shape_var, state='readonly',
@@ -221,24 +283,25 @@ class Window(tk.Tk):
         self.options_button.image = ph
 
         # placing widgets
-        self.buttons_frame.pack()
+        # placing widgets
+        self.buttons_frame.pack(side='top', fill='x')
         self.canvas_frame.pack(expand=True, fill=tk.BOTH)
-        bottom_frame.pack()
+        self.status_bar.pack(side='bottom', fill='x')
 
         self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.cords_label.grid(row=0, column=1)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
 
         # groups of widgets
-        self.sheet_shapes = {'line': pencil, 'square': square_draw, 'round': round_draw}
-        self.sheet_tools = {'erase': eraser, 'draw': draw, 'hover': self.hover_button}
+        self.sheet_shapes = {'line': pencil, 'square': square_draw, 'round': round_draw, 'diamond': diamond_draw}
+        self.sheet_tools = {'erase': eraser, 'draw': draw, 'hover': self.hover_button, 'eyedropper': self.eyedropper_button}
         self.placing_modes = {'drag': hold_move, 'straight': straight, 'centered': from_same}
-        self.buttons_list = (draw, eraser, pencil, square_draw, round_draw, color_button, second_color, deafult_bg,
+        self.buttons_list = (draw, eraser, pencil, square_draw, round_draw, diamond_draw, color_button, second_color, deafult_bg,
                              save_image, upload_image, erase_canvas, self.add_text, options_button, self.hover_button,
-                             undo, self.redo_button, hold_move, straight, from_same, self.magnet_button, self.change_colorb,
-                             self.bit_button, self.usage_button, self.github_button)
+                             undo, self.redo_button, hold_move, straight, from_same, self.magnet_button, self.grid_button, self.change_colorb,
+                             self.eyedropper_button, self.bit_button, self.usage_button, self.github_button)
         self.text_list = draw_erase_title, lines_title, shapes_title, color_title, file_title, self.cords_label, sizes_title, write_title, edit_title, ashape_title, dash_title, dash_shape_title, dash_line_title, self.closest_item, self.bit_title
         self.fgbg_list = self.buttons_list + self.text_list
-        self.frames = self.buttons_frame, self.canvas_frame, bottom_frame, width_size_frame, dash_shape_frame, dash_line_frame, self.bit_frame, self.bonus_frame
+        self.frames = self.buttons_frame, self.canvas_frame, self.status_bar, width_size_frame, dash_shape_frame, dash_line_frame, self.bit_frame, self.bonus_frame
 
 
         # activate UI
@@ -255,6 +318,7 @@ class Window(tk.Tk):
 
         # configuration related to UI
         self.canvas.bind('<B1-Motion>', self.paint)
+        self.canvas.bind('<Configure>', self.update_canvas_info) 
         # release to update the last point of drawing variable to not make connected lines
         self.canvas.bind('<ButtonRelease-1>', self.paint)
         self.canvas.bind('<MouseWheel>', self.change_size_sc)
@@ -355,6 +419,19 @@ class Window(tk.Tk):
             self.tool_width.set(self.output_size.get())
         elif self.current_mode == 'erase':
             self.tool_width.set(self.eraser_size.get())
+        
+        if hasattr(self, 'size_status'):
+            self.size_status.configure(text=f"Size: {self.tool_width.get()}px")
+
+    def change_size(self):
+        self.set_width() # Call set_width to update tool_width and size_status
+
+    def update_canvas_info(self, event=None):
+        width = self.canvas.winfo_width()
+        height = self.canvas.winfo_height()
+        self.canvas_info.configure(text=f"Size: {width} x {height}")
+        if hasattr(self, 'size_status'):
+            self.size_status.configure(text=f"Size: {self.tool_width.get()}px")
 
     def button_mannagment(self, tool):
         if tool in self.pen_types:
@@ -385,16 +462,18 @@ class Window(tk.Tk):
         self.unbind('<ButtonRelease-1>')
         self.line_placing(self.points_mode.get())
 
-        self.cords_label.grid_forget()
-        self.closest_item.grid_forget()
-        self.cords_label.grid(row=0, column=1)
 
         if mode == 'draw':
             self.canvas.configure(cursor='pencil')
             self.color.set(self.paint_color.get())
+            self.tool_width.set(self.output_size.get())
         else:
             self.canvas.configure(cursor=tk.DOTBOX)
             self.color.set(self.eraser_color)
+            self.tool_width.set(self.eraser_size.get())
+            
+        if hasattr(self, 'size_status'):
+             self.size_status.configure(text=f"Size: {self.tool_width.get()}px")
 
         self.button_mannagment(mode)
         self.current_mode = mode
@@ -464,10 +543,14 @@ class Window(tk.Tk):
                 except IndexError:
                     pass
             self.redo_button.configure(state=tk.ACTIVE)
+            self.undo_count += 1
+            if self.us_active: self.update_usage_ui()
 
     def redo(self):
         if self.last_items:
             item = self.last_items[-1]
+            self.redo_count += 1
+            if self.us_active: self.update_usage_ui()
 
 
     def line_placing(self, mode='drag'):
@@ -521,15 +604,18 @@ class Window(tk.Tk):
                                                         self.y, dash=dl_size,
                                                         fill=self.color.get(), width=self.tool_width.get(),
                                                         smooth=self.smooth_line.get())
-                elif self.pen_type.get() == 'square' or self.pen_type.get() == 'round':
+                elif self.pen_type.get() == 'square' or self.pen_type.get() == 'round' or self.pen_type.get() == 'diamond':
 
                     if self.pen_type.get() == 'square':
                         self.line = self.canvas.create_polygon(self.p_x, self.p_y, self.p_x, self.y, self.x, self.sq_y,
                                                                fill=s_color,
                                                                outline=self.color.get())
-                    else:
+                    elif self.pen_type.get() == 'round':
                         self.line = self.canvas.create_oval(self.p_x, self.p_y, self.sq_x, self.sq_y, fill=s_color,
                                                             outline=self.color.get())
+                    elif self.pen_type.get() == 'diamond':
+                        r = self.tool_width.get()
+                        self.line = self.canvas.create_polygon(self.x, self.y - r, self.x + r, self.y, self.x, self.y + r, self.x - r, self.y, fill=s_color, outline=self.color.get())
 
                 self.all_lines_list.append(self.line)
                 self.line_group.append(self.line)
@@ -545,6 +631,7 @@ class Window(tk.Tk):
                     initial_x, initial_y, x1, y1 = self.canvas.bbox((self.line_group[0]))
                     self.canvas.coords(self.line_group[0], initial_x, initial_y, self.x, self.y)
                 self.line_group = []
+                if self.us_active: self.update_usage_ui()
 
         elif self.points_mode.get() == 'straight':
             if event.type == tk.EventType.ButtonRelease:
@@ -594,7 +681,7 @@ class Window(tk.Tk):
             for img in self.images_list:
                 self.canvas.move(img, self.movep_x, self.movep_y)
         else:
-            '''+ optional - make the borders more clear \ detect them better'''
+            '''+ optional - make the borders more clear \\ detect them better'''
             item = self.canvas.find_closest(self.x, self.y)
             if item:
                 for group in self.line_groups:
@@ -653,6 +740,19 @@ class Window(tk.Tk):
         except Exception as e:
             print(e)
 
+    def button_mannagment(self, tool):
+        # configure the button that is preseed to be sunken and the others to raise
+        for i in self.sheet_tools:
+            if i != tool:
+                self.sheet_tools[i].configure(relief='raise', bg='SystemButtonFace')
+            else:
+                self.sheet_tools[i].configure(relief='sunken', bg='grey')
+                if hasattr(self, 'tool_status'):
+                    self.tool_status.configure(text=f"Tool: {tool.capitalize()}")
+                if hasattr(self, 'hint_label') and hasattr(self, 'tool_hints'):
+                    hint = self.tool_hints.get(tool, "")
+                    self.hint_label.configure(text=hint)
+
     def color_select(self, mode='main'):
         color = colorchooser.askcolor(title='Select a color')
 
@@ -664,10 +764,14 @@ class Window(tk.Tk):
             if self.current_mode == 'draw':
                 self.draw_erase()
 
+    def update_canvas_info(self, event=None):
+        if hasattr(self, 'canvas_info'):
+            self.canvas_info.configure(text=f"Size: {self.canvas.winfo_width()} x {self.canvas.winfo_height()}")
+
     def cords(self, event):
         # some dynamic x,y capture and calculations
         self.x, self.y = event.x, event.y
-        self.cords_label.configure(text=f'X coordinates:{self.x} | Y coordinates:{self.y}')
+        self.cords_label.configure(text=f'X: {self.x}, Y: {self.y}')
 
         self.p_x, self.p_y = self.x - self.tool_width.get(), self.y - self.tool_width.get()
         self.sq_x, self.sq_y = self.x + self.tool_width.get(), self.y + self.tool_width.get()
@@ -691,6 +795,9 @@ class Window(tk.Tk):
             d = True
         if d:
             self.canvas.delete('all')
+            self.clear_count += 1
+            self.line_groups.clear()
+            if self.us_active: self.update_usage_ui()
 
     def add_special(self, mode='text'):
         self.last_active, self.text_msg = mode, ''
@@ -726,10 +833,12 @@ class Window(tk.Tk):
                 self.canvas.create_text(self.x, self.y, text=self.text_msg,
                                         font=(self.font_var.get(), self.size_var.get(), self.typeface_var.get()),
                                         fill=self.paint_color.get(), angle=self.text_angle_var.get())
+                if self.us_active: self.update_usage_ui()
                 if self.text_once.get():
                     self.deactivate(mode=mode)
 
         elif mode == 'shape':
+            if self.us_active: self.update_usage_ui()
             d_size, d_space, d_tup = (self.shape_dz.get()), (self.shape_dp.get()), ()
             if isinstance(d_size, str) and d_size.isdigit(): d_size = int(d_size)
             if isinstance(d_space, str) and d_space.isdigit(): d_space = int(d_space)
@@ -764,7 +873,7 @@ class Window(tk.Tk):
 
                 self.canvas.create_arc(p_x, p_y, sq_x, sq_y, fill=self.paint_color.get(), start=sdegree, dash=d_tup,
                                        outline=self.paint_second_color.get(), width=width, style=self.shape_var.get(), extent=sextend)
-            elif self.shape_var.get() in ('tringle', 'pentagon', 'right triangle', 'hexagon', 'octagon'):
+            elif self.shape_var.get() in ('tringle', 'pentagon', 'right triangle', 'hexagon', 'octagon', 'star', 'heart'):
                 x_mid = (p_x + sq_x) // 2  # base mid
                 x_dis = (sq_x - p_x)  # base len
 
@@ -819,6 +928,32 @@ class Window(tk.Tk):
                     elif self.direction_var.get() == 'Left top':
                         dir_tuple = (sq_x, sq_y, p_x, sq_y, p_x, p_y)
 
+                elif self.shape_var.get() == 'star':
+                    cx, cy = (p_x + sq_x) // 2, (p_y + sq_y) // 2
+                    rx, ry = (sq_x - p_x) // 2, (sq_y - p_y) // 2
+                    points = []
+                    for i in range(10):
+                        angle = -math.pi / 2 + i * math.pi / 5
+                        r_factor = 1 if i % 2 == 0 else 0.4
+                        x = cx + rx * r_factor * math.cos(angle)
+                        y = cy + ry * r_factor * math.sin(angle)
+                        points.extend([x, y])
+                    dir_tuple = tuple(points)
+
+                elif self.shape_var.get() == 'heart':
+                    cx, cy = (p_x + sq_x) // 2, (p_y + sq_y) // 2
+                    w = (sq_x - p_x)
+                    h = (sq_y - p_y)
+                    points = []
+                    steps = 40
+                    for i in range(steps):
+                        t = (2 * math.pi * i) / steps
+                        x_val = 16 * math.sin(t)**3
+                        y_val = 13 * math.cos(t) - 5 * math.cos(2*t) - 2 * math.cos(3*t) - math.cos(4*t)
+                        px = cx + x_val * (w / 35)
+                        py = cy - y_val * (h / 35)
+                        points.extend([px, py])
+                    dir_tuple = tuple(points)
 
                 else:
                     dir_tuple = self.poly_points
@@ -858,6 +993,9 @@ class Window(tk.Tk):
 
             self.magnet_var.set(False)
             self.magnet_button.configure(bg=self.predefined_bg)
+        elif mode == 'eyedropper':
+            self.canvas.unbind('<Button-1>')
+            self.eyedropper_button.configure(bg=self.predefined_bg)
         else:
             self.shape_button.configure(bg=self.predefined_bg)
         self.current_mode = self.last_mode
@@ -898,10 +1036,10 @@ class Window(tk.Tk):
         # many customizations options
         def change_transparency(size):
             tranc = float(size) / 100
-            print(tranc)
+            # print(tranc)
             self.attributes('-alpha', tranc)
 
-        def change_reliefs():
+        def change_reliefs(event=None):
             self.canvas.configure(relief=self.relief_var_canvas.get())
             for button in self.buttons_list:
                 button.configure(relief=self.relief_var_buttons.get())
@@ -939,130 +1077,154 @@ class Window(tk.Tk):
         option_root = tk.Toplevel()
         option_root.title('Egon draw - Options')
         option_root.resizable(False, False)
-        op_font = 'arial 10 bold'
-
-        titles = 'Change transparency', 'App colors', 'UI mode', 'Change reliefs', 'Others', 'Dots options', 'Scroll bars', 'Move paint', 'Special save', 'Lines', 'Bitmap'
-        transparency_title, colors_title, ui_mode, relief_title, others_title, dotted_line_title, scroll_bars_title, mp_title, sp_title, ln_title, bm_title = [
-            tk.Label(option_root, text=t, font=op_font) for t in titles]
-        # UI's transparency
-        transparency_bar = ttk.Scale(option_root, from_=10, to=100, orient='horizontal', command=change_transparency,
-                                     value=100)
-        # UI colors
-        app_bg = tk.Button(option_root, text='general background', command=colors, bd=1)
-        app_fg = tk.Button(option_root, text='general foreground', command=lambda: colors('foreground'), bd=1)
-        eraser_based_bg = tk.Checkbutton(option_root, variable=self.eraser_bg, text='Eraser same as bg')
-        # UI modes
-        uim_frame = tk.Frame(option_root)
-        buttons_uim = tk.Radiobutton(uim_frame, variable=self.plc_mode, text='Buttons', value='buttons', command=self.place_ui)
-        menus_uim = tk.Radiobutton(uim_frame, variable=self.plc_mode, text='Menus (limited)', value='menus', command=self.place_ui)
-        # relief options for the canvas and buttons
-        relief_frame = tk.Frame(option_root)
-        relief_tc = tk.Label(relief_frame, text='Canvas reliefs', font='arial 8')
-        relief_combo_c = ttk.Combobox(relief_frame, textvariable=self.relief_var_canvas, values=self.relief_values)
-        relief_tb = tk.Label(relief_frame, text='Buttons reliefs', font='arial 8')
-        relief_combo_v = ttk.Combobox(relief_frame, textvariable=self.relief_var_buttons, values=self.relief_values)
-        # lines drawing options
-        lines_frame = tk.Frame(option_root)
-        line_endstr_combo = tk.Checkbutton(lines_frame, variable=self.connect_fl, text='Connected end\start')
-        # con_lines_combo = tk.Checkbutton(lines_frame, variable=self.connected_lines, text='Connected lines',
-        #                                  command=self.update_cl)
-        smooth_line_b = tk.Checkbutton(lines_frame, variable=self.smooth_line, text='Smooth line')
-        # canvas' scroll bars
-        scroll_bars_frame = tk.Frame(option_root)
-        hrz_bar_box = tk.Checkbutton(scroll_bars_frame, variable=self.hrz_s_var, text='Horizontal', command=scroll_bars)
-        vrt_bar_box = tk.Checkbutton(scroll_bars_frame, variable=self.vrt_s_var, text='Vertical',
-                                     command=lambda: scroll_bars('vrt'))
-        # scroll bars inc options
-        inc_title = tk.Label(option_root, text='increment', font='arial 10 underline')
-        scroll_bars_frame2 = tk.Frame(option_root)
-        self.inc_hrz = tk.Entry(scroll_bars_frame2, width=8, bd=1)
-        self.inc_vrt = tk.Entry(scroll_bars_frame2, width=8, bd=1)
-        self.inc_hrz.insert(tk.END, 0), self.inc_vrt.insert(tk.END, 0)
-        # move paint - with ratios and methods
-        enable_title = tk.Label(option_root, text='Enable', font='arial 8 underline')
-        enable_frame = tk.Frame(option_root)
-        enable_mouse = tk.Checkbutton(enable_frame, variable=self.mp_mouse, text='Mouse', command=self.update_mp)
-        enable_keys = tk.Checkbutton(enable_frame, variable=self.mp_keys, text='Keys', command=self.update_mp)
-
-        single_all_title = tk.Label(option_root, text='Move single/all item(s)', font='arial 8 underline')
-        single_all_frame = tk.Frame(option_root)
-        mouse_sva_title = tk.Label(single_all_frame, text='Mouse', font='arial 8')
-        keys_sva_title = tk.Label(single_all_frame, text='Keys', font='arial 8')
-        mouse_sva_check = tk.Checkbutton(single_all_frame, text='All', variable=self.move_single_ms)
-        keys_sva_check = tk.Checkbutton(single_all_frame, text='All', variable=self.move_single_ar)
-
-        mouse_ratio_title = tk.Label(option_root, text='Mouse move ratio', font='arial 8 underline')
-        mouse_ratio_scale = ttk.Scale(option_root, from_=1, to=3, variable=self.mp_mr, value=1)
-        keys_pixel_title = tk.Label(option_root, text='Keys move distance', font='arial 8 underline')
-        keys_pixel_amount = ttk.Combobox(option_root, textvariable=self.move_px, values=tuple(range(10, 100, 10)),
-                                         width=10)
-        # post-script save methods
-        ps_frame = tk.Frame(option_root)
-        ps_radio = tk.Radiobutton(ps_frame, variable=self.ps_mode, value='ps', text='Postscript',
-                                  command=self.update_sp_button)
-        pdf_radio = tk.Radiobutton(ps_frame, variable=self.ps_mode, value='pdf', text='PDF',
-                                   command=self.update_sp_button)
-        # other options
-        singular_frame = tk.Frame(option_root)
-        text_once_combo = tk.Checkbutton(singular_frame, variable=self.text_once, text='Singular text')
-        shape_once_combo = tk.Checkbutton(singular_frame, variable=self.shape_once, text='Singular shape')
-        last_frame = tk.Frame(option_root)
-        skip_clear_w = tk.Checkbutton(last_frame, variable=self.erase_skipw, text='Erase canvas warning')
+        # Apply standard theme background if possible, or let ttk handle it
         
-        bitmap_frame = tk.Frame(option_root)
-        add_bitmap_check = tk.Checkbutton(bitmap_frame, variable=self.bitmap_active, text='Enable',
-                                          command=self.bitmap_mode)
-        singular_bit = tk.Checkbutton(bitmap_frame, variable=self.bit_once, text='One at a time')
+        # Create Notebook (Tabs)
+        notebook = ttk.Notebook(option_root)
+        notebook.pack(expand=True, fill='both', padx=10, pady=10)
 
+        # Tab 1: Appearance
+        tab_appearance = ttk.Frame(notebook)
+        notebook.add(tab_appearance, text='Appearance')
 
-        # confine
+        # Tab 2: Tools & Behavior
+        tab_tools = ttk.Frame(notebook)
+        notebook.add(tab_tools, text='Tools & Behavior')
 
-        transparency_title.grid(row=0, column=1, padx=10), transparency_bar.grid(row=1, column=1)
-        colors_title.grid(row=2, column=1, pady=3), app_bg.grid(row=3, column=1, pady=1), app_fg.grid(row=4, column=1,pady=1)
-        eraser_based_bg.grid(row=5, column=1)
-        ui_mode.grid(row=6, column=1), uim_frame.grid(row=7, column=1)
-        buttons_uim.grid(row=0, column=0), menus_uim.grid(row=0, column=2)
+        # Tab 3: General
+        tab_general = ttk.Frame(notebook)
+        notebook.add(tab_general, text='General')
 
-        relief_title.grid(row=8, column=1)
-        relief_frame.grid(row=9, column=1, pady=3), relief_tc.grid(row=0, column=0)
-        relief_combo_c.grid(row=1, column=0, padx=8), relief_tb.grid(row=0, column=2), relief_combo_v.grid(row=1,column=2,pady=3,padx=8)
-        ln_title.grid(row=10, column=1), lines_frame.grid(row=11, column=1), smooth_line_b.grid(row=0,column=0), line_endstr_combo.grid(row=0, column=2)
-        scroll_bars_title.grid(row=13, column=1), scroll_bars_frame.grid(row=14, column=1), hrz_bar_box.grid(row=0,column=0), vrt_bar_box.grid(row=0, column=2)
-        inc_title.grid(row=15, column=1), scroll_bars_frame2.grid(row=16, column=1), self.inc_hrz.grid(row=0, column=0,padx=5), self.inc_vrt.grid(row=0, column=2, padx=5)
-
-        mp_title.grid(row=17, column=1)
-        enable_title.grid(row=18, column=1)
-        enable_frame.grid(row=19, column=1)
-        enable_mouse.grid(row=0, column=0), enable_keys.grid(row=0, column=2)
-        single_all_title.grid(row=20, column=1), single_all_frame.grid(row=21, column=1)
-        mouse_sva_title.grid(row=0, column=0), keys_sva_title.grid(row=0, column=2)
-        mouse_sva_check.grid(row=1, column=0), keys_sva_check.grid(row=1, column=2)
-
-
-        mouse_ratio_title.grid(row=22, column=1)
-        mouse_ratio_scale.grid(row=23, column=1)
-        keys_pixel_title.grid(row=24, column=1)
-        keys_pixel_amount.grid(row=25, column=1)
-
-        sp_title.grid(row=27, column=1)
-        ps_frame.grid(row=28, column=1)
-        ps_radio.grid(row=0, column=0)
-        pdf_radio.grid(row=0, column=2)
+        # --- Tab 1: Appearance Content ---
         
-        bm_title.grid(row=29, column=1)
-        bitmap_frame.grid(row=30, column=1)
-        add_bitmap_check.grid(row=0, column=0)
-        singular_bit.grid(row=0, column=2)
+        # Transparency Group
+        trans_group = ttk.LabelFrame(tab_appearance, text="Window Transparency", padding=10)
+        trans_group.pack(fill='x', padx=10, pady=5)
+        ttk.Scale(trans_group, from_=10, to=100, orient='horizontal', command=change_transparency, value=self.attributes('-alpha')*100).pack(fill='x')
+
+        # Colors Group
+        color_group = ttk.LabelFrame(tab_appearance, text="Application Colors", padding=10)
+        color_group.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Button(color_group, text='Change Background Color', command=colors).pack(fill='x', pady=2)
+        ttk.Button(color_group, text='Change Foreground Color', command=lambda: colors('foreground')).pack(fill='x', pady=2)
+        ttk.Checkbutton(color_group, variable=self.eraser_bg, text='Sync Eraser with Background').pack(pady=5, anchor='w')
+
+        # Reliefs Group
+        relief_group = ttk.LabelFrame(tab_appearance, text="Interface Reliefs", padding=10)
+        relief_group.pack(fill='x', padx=10, pady=5)
+        
+        r_frame = ttk.Frame(relief_group)
+        r_frame.pack(fill='x')
+        
+        ttk.Label(r_frame, text='Canvas Border:').grid(row=0, column=0, padx=5, sticky='w')
+        relief_combo_c = ttk.Combobox(r_frame, textvariable=self.relief_var_canvas, values=self.relief_values, width=10, state='readonly')
+        relief_combo_c.grid(row=0, column=1, padx=5)
+        
+        ttk.Label(r_frame, text='Buttons:').grid(row=1, column=0, padx=5, sticky='w')
+        relief_combo_v = ttk.Combobox(r_frame, textvariable=self.relief_var_buttons, values=self.relief_values, width=10, state='readonly')
+        relief_combo_v.grid(row=1, column=1, padx=5)
+
+        relief_combo_c.bind('<<ComboboxSelected>>', change_reliefs)
+        relief_combo_v.bind('<<ComboboxSelected>>', change_reliefs)
 
 
-        others_title.grid(row=31, column=1)
-        singular_frame.grid(row=32, column=1), text_once_combo.grid(row=0, column=0), shape_once_combo.grid(row=0,column=2)
-        last_frame.grid(row=33, column=1)
-        skip_clear_w.grid(row=0, column=0)
+        # --- Tab 2: Tools & Behavior Content ---
 
-        relief_combo_c.bind('<<ComboboxSelected>>', lambda event: change_reliefs())
-        relief_combo_v.bind('<<ComboboxSelected>>', lambda event: change_reliefs())
-        self.inc_hrz.bind('<KeyRelease>', self.update_inc), self.inc_vrt.bind('<KeyRelease>', self.update_inc)
+        # Lines Group
+        lines_group = ttk.LabelFrame(tab_tools, text="Line Settings", padding=10)
+        lines_group.pack(fill='x', padx=10, pady=5)
+        ttk.Checkbutton(lines_group, variable=self.smooth_line, text='Smooth line drawing').pack(anchor='w')
+        ttk.Checkbutton(lines_group, variable=self.connect_fl, text='Connect lines (continuous)').pack(anchor='w')
+
+        # Scroll Bars Group
+        scroll_group = ttk.LabelFrame(tab_tools, text="Scroll Bars", padding=10)
+        scroll_group.pack(fill='x', padx=10, pady=5)
+        
+        s_check_frame = ttk.Frame(scroll_group)
+        s_check_frame.pack(fill='x')
+        ttk.Checkbutton(s_check_frame, variable=self.hrz_s_var, text='Horizontal', command=scroll_bars).pack(side='left', padx=5)
+        ttk.Checkbutton(s_check_frame, variable=self.vrt_s_var, text='Vertical', command=lambda: scroll_bars('vrt')).pack(side='left', padx=15)
+        
+        ttk.Separator(scroll_group, orient='horizontal').pack(fill='x', pady=5)
+        
+        s_inc_frame = ttk.Frame(scroll_group)
+        s_inc_frame.pack(fill='x', pady=2)
+        ttk.Label(s_inc_frame, text="Scroll Increment (px):").pack(side='left', padx=5)
+        
+        self.inc_hrz = ttk.Spinbox(s_inc_frame, from_=0, to=100, width=5)
+        self.inc_vrt = ttk.Spinbox(s_inc_frame, from_=0, to=100, width=5)
+        self.inc_hrz.set(0) # Default
+        self.inc_vrt.set(0) # Default
+        
+        # Note: Keeping original logic where Entry text was used. Spinbox works similarly.
+        # But we need to check if self.update_inc expects an event.
+        self.inc_hrz.pack(side='left', padx=2)
+        ttk.Label(s_inc_frame, text="H").pack(side='left')
+        
+        self.inc_vrt.pack(side='left', padx=2)
+        ttk.Label(s_inc_frame, text="V").pack(side='left')
+
+        self.inc_hrz.bind('<KeyRelease>', self.update_inc)
+        self.inc_vrt.bind('<KeyRelease>', self.update_inc)
+        self.inc_hrz.bind('<<Increment>>', self.update_inc)
+        self.inc_vrt.bind('<<Decrement>>', self.update_inc)
+        self.inc_hrz.bind('<<Increment>>', self.update_inc) # Bind spinbox arrows
+        self.inc_vrt.bind('<<Decrement>>', self.update_inc)
+
+
+        # Move Paint Group
+        mp_group = ttk.LabelFrame(tab_tools, text="Move & Paint Control", padding=10)
+        mp_group.pack(fill='x', padx=10, pady=5)
+        
+        mp_en_frame = ttk.Frame(mp_group)
+        mp_en_frame.pack(fill='x')
+        ttk.Label(mp_en_frame, text="Enable Move by:").pack(side='left')
+        ttk.Checkbutton(mp_en_frame, variable=self.mp_mouse, text='Mouse', command=self.update_mp).pack(side='left', padx=5)
+        ttk.Checkbutton(mp_en_frame, variable=self.mp_keys, text='Keys', command=self.update_mp).pack(side='left', padx=5)
+
+        ttk.Separator(mp_group, orient='horizontal').pack(fill='x', pady=5)
+        
+        mp_mode_frame = ttk.Frame(mp_group)
+        mp_mode_frame.pack(fill='x')
+        ttk.Label(mp_mode_frame, text="Move 'All' Items:").pack(side='left')
+        ttk.Checkbutton(mp_mode_frame, text='Mouse Drag', variable=self.move_single_ms).pack(side='left', padx=10)
+        ttk.Checkbutton(mp_mode_frame, text='Keys', variable=self.move_single_ar).pack(side='left', padx=10)
+
+        # Scales
+        ttk.Label(mp_group, text='Mouse Sensitivity:').pack(anchor='w', pady=(5,0))
+        ttk.Scale(mp_group, from_=1, to=3, variable=self.mp_mr, value=1).pack(fill='x')
+        
+        ttk.Label(mp_group, text='Key Step Distance:').pack(anchor='w', pady=(5,0))
+        ttk.Combobox(mp_group, textvariable=self.move_px, values=tuple(range(10, 100, 10)), width=10, state='readonly').pack(fill='x')
+
+
+        # --- Tab 3: General Content ---
+
+        # UI Mode Group
+        ui_group = ttk.LabelFrame(tab_general, text="Interface Mode", padding=10)
+        ui_group.pack(fill='x', padx=10, pady=5)
+        ttk.Radiobutton(ui_group, variable=self.plc_mode, text='Standard Buttons', value='buttons', command=self.place_ui).pack(anchor='w')
+        ttk.Radiobutton(ui_group, variable=self.plc_mode, text='Minimalist Menus', value='menus', command=self.place_ui).pack(anchor='w')
+
+        # Export Group
+        save_group = ttk.LabelFrame(tab_general, text="Export Options", padding=10)
+        save_group.pack(fill='x', padx=10, pady=5)
+        ttk.Radiobutton(save_group, variable=self.ps_mode, value='ps', text='Postscript (.ps)', command=self.update_sp_button).pack(side='left', padx=5)
+        ttk.Radiobutton(save_group, variable=self.ps_mode, value='pdf', text='PDF Document (.pdf)', command=self.update_sp_button).pack(side='left', padx=5)
+
+        # Bitmap Group
+        bm_group = ttk.LabelFrame(tab_general, text="Bitmap Settings", padding=10)
+        bm_group.pack(fill='x', padx=10, pady=5)
+        ttk.Checkbutton(bm_group, variable=self.bitmap_active, text='Enable Bitmaps', command=self.bitmap_mode).pack(side='left', padx=5)
+        ttk.Checkbutton(bm_group, variable=self.bit_once, text='Place One at a time').pack(side='left', padx=15)
+
+        # Misc Group
+        misc_group = ttk.LabelFrame(tab_general, text="Miscellaneous", padding=10)
+        misc_group.pack(fill='x', padx=10, pady=5)
+        ttk.Checkbutton(misc_group, variable=self.text_once, text='Reset tool after adding Text').pack(anchor='w')
+        ttk.Checkbutton(misc_group, variable=self.shape_once, text='Reset tool after adding Shape').pack(anchor='w')
+        ttk.Checkbutton(misc_group, variable=self.erase_skipw, text='Show warning before "Erase All"').pack(anchor='w')
 
     def hover_mouse(self, activate=True, slm=False):
 
@@ -1080,9 +1242,7 @@ class Window(tk.Tk):
             self.button_mannagment('hover')
             self.current_mode = 'hover'
 
-            self.cords_label.grid_forget()
-            self.cords_label.grid(row=0, column=0, padx=25)
-            self.closest_item.grid(row=0, column=2, padx=25)
+            self.closest_item.configure(text="Hover over an item to see details")
 
             self.canvas.bind('<ButtonRelease-1>', self.identify_item)
 
@@ -1159,7 +1319,7 @@ class Window(tk.Tk):
         else:
             self.canvas.bind('<ButtonRelease-1>', self.paint)
 
-    def update_inc(self):
+    def update_inc(self, event=None):
         self.canvas.configure(xscrollincrement=int(self.inc_hrz.get()), yscrollincrement=int(self.inc_vrt.get()))
 
     def fullscreen(self, event):
@@ -1172,10 +1332,10 @@ class Window(tk.Tk):
          lines_frame, dash_frame) = self.topframes
         (draw_erase_title, lines_title, shapes_title, color_title, file_title, self.cords_label, sizes_title, write_title, edit_title,
          ashape_title, dash_title, dash_shape_title, dash_line_title, self.closest_item, self.bit_title) = self.text_list
-        (draw, eraser, pencil, square_draw, round_draw, color_button, second_color, deafult_bg,
+        (draw, eraser, pencil, square_draw, round_draw, diamond_draw, color_button, second_color, deafult_bg,
                              save_image, upload_image, erase_canvas, self.add_text, options_button, self.hover_button,
-                             undo, self.redo_button, hold_move, straight, from_same, self.magnet_button, self.change_colorb,
-                             self.bit_button, self.usage_button, self.github_button) = self.buttons_list
+                             undo, self.redo_button, hold_move, straight, from_same, self.magnet_button, self.grid_button, self.change_colorb,
+                             self.eyedropper_button, self.bit_button, self.usage_button, self.github_button) = self.buttons_list
         self.buttons_frame, self.canvas_frame, bottom_frame, width_size_frame, dash_shape_frame, dash_line_frame, self.bit_frame, self.bonus_frame = self.frames
 
 
@@ -1185,84 +1345,151 @@ class Window(tk.Tk):
         self.config(menu='')
 
         if self.plc_mode.get() == 'buttons':
-            self.buttons_frame.pack(side='top')
+            self.buttons_frame.pack(side='top', fill='x')
             self.canvas_frame.pack(expand=True, fill=tk.BOTH)
-            bottom_frame.pack()
+            self.status_bar.pack(side='bottom', fill='x')
 
-            draw_erase_title.grid(row=0, column=0)
-            draw_erase_frame.grid(row=1, column=0, padx=2)
-            draw.pack(pady=1)
-            eraser.pack(pady=1)
-            self.hover_button.pack(pady=1)
+            # Create Ribbon (Notebook)
+            if hasattr(self, 'ribbon'):
+                self.ribbon.destroy()
+            self.ribbon = ttk.Notebook(self.buttons_frame)
+            self.ribbon.pack(fill='both', expand=True, padx=2, pady=2)
 
-            lines_title.grid(row=0, column=1)
-            lines_frame.grid(row=1, column=1, padx=2)
-            hold_move.pack(pady=1)
-            straight.pack(pady=1)
-            from_same.pack(pady=1)
+            # --- Tab 1: Home (Tools, Colors, Sizes) ---
+            tab_home = ttk.Frame(self.ribbon)
+            self.ribbon.add(tab_home, text='Home')
 
-            sizes_title.grid(row=0, column=2)
-            sizes_frame.grid(row=1, column=2, padx=2)
-            self.draw_size_box.pack(pady=3)
-            self.erase_size_box.pack(pady=3)
-            self.font_size.pack(pady=1)
+            # Tools Group
+            draw_erase_frame.lift()
+            draw_erase_frame.pack(in_=tab_home, side='left', padx=5, pady=5, fill='y')
+            draw.pack(side='left', padx=2)
+            eraser.pack(side='left', padx=2)
+            self.hover_button.pack(side='left', padx=2)
+            self.eyedropper_button.pack(side='left', padx=2)
 
-            shapes_title.grid(row=0, column=3)
-            shapes_frame.grid(row=1, column=3, padx=2)
-            pencil.pack(pady=1)
-            round_draw.pack(pady=1)
-            square_draw.pack(pady=1)
+            ttk.Separator(tab_home, orient='vertical').pack(side='left', fill='y', padx=5)
 
-            color_title.grid(row=0, column=4)
-            color_frame.grid(row=1, column=4, padx=2)
-            color_button.pack(pady=1)
-            second_color.pack(pady=1)
-            deafult_bg.pack(pady=1)
-            self.change_colorb.pack(pady=1)
+            # Colors Group
+            color_frame.lift()
+            color_frame.pack(in_=tab_home, side='left', padx=5, pady=5, fill='y')
+            color_button.pack(side='left', padx=2)
+            second_color.pack(side='left', padx=2)
+            deafult_bg.pack(side='left', padx=2)
+            self.change_colorb.pack(side='left', padx=2)
 
-            file_title.grid(row=0, column=5)
-            file_frame.grid(row=1, column=5, padx=2)
-            save_image.pack(pady=1)
-            upload_image.pack(pady=1)
-            self.save_script.pack(pady=1)
+            ttk.Separator(tab_home, orient='vertical').pack(side='left', fill='y', padx=5)
 
-            write_title.grid(row=0, column=6)
-            write_frame.grid(row=1, column=6, padx=3)
-            self.add_text.pack()
-            self.font_combo.pack(pady=1)
-            self.typefaces.pack(pady=1)
-            self.text_angle.pack()
-
-            edit_title.grid(row=0, column=7)
-            edit_frame.grid(row=1, column=7, padx=3)
-            erase_canvas.pack(pady=1)
-            undo.pack(pady=1)
-            self.redo_button.pack(pady=1)
-            self.magnet_button.pack(pady=1)
-
-            ashape_title.grid(row=0, column=8)
-            ashape_frame.grid(row=1, column=8, padx=3)
-            self.shape_button.pack(pady=1)
-            self.shapes_combo.pack(pady=1)
-            width_size_frame.pack()
-            self.shapes_size.grid(row=0, column=0, padx=3)
-            self.shapes_width.grid(row=0, column=2, padx=3)
-
-            dash_title.grid(row=0, column=9)
-            dash_frame.grid(row=1, column=9)
-            dash_shape_title.pack(), dash_shape_frame.pack()
-            self.shape_dz.grid(row=0, column=0, padx=1), self.shape_dp.grid(row=0, column=2, padx=1)
-            dash_line_title.pack(), dash_line_frame.pack()
-            self.line_dz.grid(row=0, column=0, padx=1), self.line_dp.grid(row=0, column=2, padx=1)
+            # Sizes Group
+            sizes_frame.lift()
+            sizes_frame.pack(in_=tab_home, side='left', padx=5, pady=5, fill='y')
+            tk.Label(sizes_frame, text="Size:", font=('Arial', 8)).pack(side='left')
+            self.draw_size_box.pack(side='left', padx=2)
+            tk.Label(sizes_frame, text="Eraser:", font=('Arial', 8)).pack(side='left')
+            self.erase_size_box.pack(side='left', padx=2)
             
-            self.bit_button.pack(pady=8)
-            self.bit_combo.pack(pady=8)
+            # --- Tab 2: Insert (Shapes, Lines, Text) ---
+            tab_insert = ttk.Frame(self.ribbon)
+            self.ribbon.add(tab_insert, text='Insert')
 
-            options_button.grid(row=1, column=11, padx=3)
+            # Basic Shapes
+            shapes_frame.lift()
+            shapes_frame.pack(in_=tab_insert, side='left', padx=5, pady=5, fill='y')
+            pencil.pack(side='left', padx=2)
+            round_draw.pack(side='left', padx=2)
+            square_draw.pack(side='left', padx=2)
+            diamond_draw.pack(side='left', padx=2)
+
+            ttk.Separator(tab_insert, orient='vertical').pack(side='left', fill='y', padx=5)
+
+            # Lines
+            lines_frame.lift()
+            lines_frame.pack(in_=tab_insert, side='left', padx=5, pady=5, fill='y')
+            hold_move.pack(side='left', padx=2)
+            straight.pack(side='left', padx=2)
+            from_same.pack(side='left', padx=2)
+
+            ttk.Separator(tab_insert, orient='vertical').pack(side='left', fill='y', padx=5)
+
+            # Custom Shapes
+            ashape_frame.lift()
+            ashape_frame.pack(in_=tab_insert, side='left', padx=5, pady=5, fill='y')
+            self.shape_button.pack(side='left', padx=2)
+            self.shapes_combo.pack(side='left', padx=2)
+            width_size_frame.lift()
+            width_size_frame.pack(in_=ashape_frame, side='left', padx=2)
+            self.shapes_size.pack(side='left')
+            self.shapes_width.pack(side='left')
+
+            ttk.Separator(tab_insert, orient='vertical').pack(side='left', fill='y', padx=5)
+
+            # Text
+            write_frame.lift()
+            write_frame.pack(in_=tab_insert, side='left', padx=5, pady=5, fill='y')
+            self.add_text.pack(side='left', padx=2)
+            self.font_combo.pack(side='left', padx=2)
+            self.font_size.pack(side='left', padx=2)
+            self.typefaces.pack(side='left', padx=2)
+            self.text_angle.pack(side='left', padx=2)
+
+            # Bitmaps
+            self.bit_button.pack(in_=self.bit_frame, side='left')
+            self.bit_combo.pack(in_=self.bit_frame, side='left', padx=2)
+            self.bit_frame.lift()
+            self.bit_frame.pack(in_=tab_insert, side='left', padx=5, pady=5)
+
+            ttk.Separator(tab_insert, orient='vertical').pack(side='left', fill='y', padx=5)
+
+            # Dash Settings
+            dash_frame.lift()
+            dash_frame.pack(in_=tab_insert, side='left', padx=5, pady=5, fill='y')
+            # Dash Shape Row
+            dash_shape_frame.lift()
+            dash_shape_frame.pack(in_=dash_frame, fill='x', pady=1)
+            tk.Label(dash_shape_frame, text="Dash Shape:", font=('Arial', 8)).pack(side='left')
+            self.shape_dz.pack(in_=dash_shape_frame, side='left', padx=1)
+            self.shape_dp.pack(in_=dash_shape_frame, side='left', padx=1)
             
-            self.bonus_frame.grid(row=1, column=12)
-            self.usage_button.grid(row=0, column=0, padx=3, pady=5)
-            self.github_button.grid(row=1, column=0, padx=3, pady=5)
+            # Dash Line Row
+            dash_line_frame.lift()
+            dash_line_frame.pack(in_=dash_frame, fill='x', pady=1)
+            tk.Label(dash_line_frame, text="Dash Line:", font=('Arial', 8)).pack(side='left')
+            self.line_dz.pack(in_=dash_line_frame, side='left', padx=1)
+            self.line_dp.pack(in_=dash_line_frame, side='left', padx=1)
+
+            # --- Tab 3: Actions (Edit, View) ---
+            tab_actions = ttk.Frame(self.ribbon)
+            self.ribbon.add(tab_actions, text='Actions')
+
+            edit_frame.lift()
+            edit_frame.pack(in_=tab_actions, side='left', padx=5, pady=5, fill='y')
+            undo.pack(side='left', padx=2)
+            self.redo_button.pack(side='left', padx=2)
+            erase_canvas.pack(side='left', padx=2)
+            
+            ttk.Separator(tab_actions, orient='vertical').pack(side='left', fill='y', padx=5)
+
+            self.magnet_button.pack(in_=edit_frame, side='left', padx=2)
+            self.grid_button.pack(in_=edit_frame, side='left', padx=2)
+            
+            # --- Tab 4: File (Save, Stats) ---
+            tab_file = ttk.Frame(self.ribbon)
+            self.ribbon.add(tab_file, text='File')
+            
+            file_frame.lift()
+            file_frame.pack(in_=tab_file, side='left', padx=5, pady=5, fill='y')
+            save_image.pack(side='left', padx=2)
+            upload_image.pack(side='left', padx=2)
+            self.save_script.pack(side='left', padx=2)
+
+            ttk.Separator(tab_file, orient='vertical').pack(side='left', fill='y', padx=5)
+
+            self.bonus_frame.lift()
+            self.bonus_frame.pack(in_=tab_file, side='left', padx=5, pady=5)
+            self.usage_button.pack(in_=self.bonus_frame, side='left', padx=2)
+            self.github_button.pack(in_=self.bonus_frame, side='left', padx=2)
+            
+            options_button.lift()
+            options_button.pack(in_=tab_file, side='right', padx=10)
 
         elif self.plc_mode.get() == 'menus':
             self.canvas_frame.pack(expand=True, fill=tk.BOTH)
@@ -1287,6 +1514,23 @@ class Window(tk.Tk):
             self.deactivate(mode='magnet')
 
         self.magnet_var.set(not (self.magnet_var.get()))
+
+    def toggle_grid(self):
+        if self.grid_active.get():
+            self.canvas.delete('grid_line')
+            self.grid_button.configure(bg=self.predefined_bg)
+            self.grid_active.set(False)
+        else:
+            w = self.canvas.winfo_width()
+            h = self.canvas.winfo_height()
+            step = 50
+            for i in range(0, w, step):
+                self.canvas.create_line(i, 0, i, h, tag='grid_line', fill='#e1e1e1')
+            for i in range(0, h, step):
+                self.canvas.create_line(0, i, w, i, tag='grid_line', fill='#e1e1e1')
+            self.canvas.tag_lower('grid_line')
+            self.grid_button.configure(bg='grey')
+            self.grid_active.set(True)
 
     def move_magnet(self, event=None):
         closest_item = self.canvas.find_closest(self.x, self.y)
@@ -1333,6 +1577,27 @@ class Window(tk.Tk):
         self.change_colorb['bg'] = 'light grey'
         self.bind('<ButtonRelease-1>', activation)
 
+    def toggle_eyedropper(self):
+        if self.current_mode != 'eyedropper':
+            self.last_mode = self.current_mode
+            self.current_mode = 'eyedropper'
+            self.canvas.configure(cursor='crosshair')
+            self.button_mannagment('eyedropper')
+            self.canvas.unbind('<B1-Motion>')
+            self.canvas.unbind('<ButtonRelease-1>')
+            self.canvas.bind('<Button-1>', self.pick_color)
+        else:
+            self.deactivate(mode='eyedropper')
+
+    def pick_color(self, event):
+        items = self.canvas.find_closest(event.x, event.y)
+        if items:
+            item = items[0]
+            color = self.canvas.itemcget(item, 'fill')
+            if color:
+                self.paint_color.set(color)
+        self.deactivate(mode='eyedropper')
+
     def bitmap_mode(self):
         if self.bitmap_active.get():
             self.bit_title.grid(row=0, column=10)
@@ -1348,74 +1613,171 @@ class Window(tk.Tk):
             if not os.path.exists(dir_name):
                 os.makedirs(dir_name)
             now = datetime.now()
+            
+            # Recalculate stats
+            lines_drawn = len(self.line_groups)
+            
+            color_list = []
+            for i in self.canvas.find_all():
+                if self.canvas.type(i) != 'bitmap':
+                    try:
+                        color_list.append(self.canvas.itemcget(i, 'fill'))
+                    except Exception:
+                        pass
+            
+            if color_list:
+                most_used_color = max(set(color_list), key=color_list.count)
+                unique_colors = len(set(color_list))
+            else:
+                most_used_color = 'None'
+                unique_colors = 0
+            
+            most_used_tool = max(self.time_dict.items(), key=operator.itemgetter(1))
+            mut_text = f'Most used tool: {most_used_tool[0]} ({timedelta(seconds=int(most_used_tool[1]))})'
+            
+            current_duration = getattr(self, 'ut', timedelta(0))
+
+            text_list = [
+                f"Session Date: {getattr(self, 'start_date', 'Unknown')}",
+                f"Total Duration: {current_duration}",
+                mut_text,
+                f"Lines drawn: {lines_drawn}",
+                f"Undos: {self.undo_count}",
+                f"Redos: {self.redo_count}",
+                f"Clears: {self.clear_count}",
+                f"Most used color: {most_used_color}",
+                f"Unique colors used: {unique_colors}",
+                "--- Tool Breakdown ---"
+            ]
+            for tool, duration in self.time_dict.items():
+                text_list.append(f'{tool.capitalize()}: {timedelta(seconds=int(duration))}')
+
             with open(os.path.join(dir_name, f'{now.strftime("%Y-%m-%d_%H-%M-%S")}.txt'), 'w') as f:
                     for line in text_list:
                         f.write(line + '\n')
+            
+            messagebox.showinfo('Success', f'Report saved to {dir_name}')
 
         def close_us():
             self.us_active = False
             usage_root.destroy()
 
         usage_root = tk.Toplevel()
-        usage_root.title('Usage stats')
+        usage_root.title('Usage Dashboard')
+        usage_root.geometry('400x500')
         usage_root.resizable(False, False)
         usage_root.protocol('WM_DELETE_WINDOW', close_us)
+        
+        style = ttk.Style()
+        style.configure('Big.TLabel', font=('Helvetica', 20, 'bold'))
+        style.configure('Header.TLabel', font=('Helvetica', 12, 'bold'))
+
+        notebook = ttk.Notebook(usage_root)
+        notebook.pack(expand=True, fill='both', padx=5, pady=5)
+
+        # === Tab 1: Dashboard ===
+        tab_overview = ttk.Frame(notebook)
+        notebook.add(tab_overview, text='Dashboard')
+
+        # Session Time Frame
+        time_frame = ttk.LabelFrame(tab_overview, text="Session Duration")
+        time_frame.pack(fill='x', padx=10, pady=5)
+        
+        self.usage_time = ttk.Label(time_frame, text='0:00:00', style='Big.TLabel', anchor='center')
+        self.usage_time.pack(pady=5, fill='x')
+
+        # Key Stats Grid
+        stats_frame = ttk.LabelFrame(tab_overview, text="Key Statistics")
+        stats_frame.pack(fill='x', padx=10, pady=5)
+        
+        # Grid layout for stats
+        # Row 0
+        ttk.Label(stats_frame, text="Lines:").grid(row=0, column=0, padx=5, pady=2, sticky='w')
+        self.ld_label = ttk.Label(stats_frame, text="0", font=('Arial', 9, 'bold'))
+        self.ld_label.grid(row=0, column=1, padx=5, pady=2, sticky='e')
+        
+        ttk.Label(stats_frame, text="Colors:").grid(row=0, column=2, padx=5, pady=2, sticky='w')
+        self.uc_label = ttk.Label(stats_frame, text="0", font=('Arial', 9, 'bold'))
+        self.uc_label.grid(row=0, column=3, padx=5, pady=2, sticky='e')
+
+        # Row 1
+        ttk.Label(stats_frame, text="Undos:").grid(row=1, column=0, padx=5, pady=2, sticky='w')
+        self.undo_label = ttk.Label(stats_frame, text="0", font=('Arial', 9, 'bold'))
+        self.undo_label.grid(row=1, column=1, padx=5, pady=2, sticky='e')
+        
+        ttk.Label(stats_frame, text="Redos:").grid(row=1, column=2, padx=5, pady=2, sticky='w')
+        self.redo_label = ttk.Label(stats_frame, text="0", font=('Arial', 9, 'bold'))
+        self.redo_label.grid(row=1, column=3, padx=5, pady=2, sticky='e')
+
+        # Row 2
+        ttk.Label(stats_frame, text="Clears:").grid(row=2, column=0, padx=5, pady=2, sticky='w')
+        self.clear_label = ttk.Label(stats_frame, text="0", font=('Arial', 9, 'bold'))
+        self.clear_label.grid(row=2, column=1, padx=5, pady=2, sticky='e')
+
+        stats_frame.columnconfigure(1, weight=1)
+        stats_frame.columnconfigure(3, weight=1)
+
+        # Most Used Tool Section
+        top_tool_frame = ttk.LabelFrame(tab_overview, text="Top Tool")
+        top_tool_frame.pack(fill='x', padx=10, pady=5)
+        
+        self.mut_label = ttk.Label(top_tool_frame, text='...', font=('Arial', 10))
+        self.mut_label.pack(pady=5)
+
+        # Most Used Color Section
+        color_frame = ttk.LabelFrame(tab_overview, text="Dominant Color")
+        color_frame.pack(fill='x', padx=10, pady=5)
+        
+        color_inner = tk.Frame(color_frame)
+        color_inner.pack(pady=5)
+        
+        self.muc_display = tk.Canvas(color_inner, width=30, height=30, bg='SystemButtonFace', highlightthickness=1, relief='sunken')
+        self.muc_display.pack(side='left', padx=10)
+        self.muc_label = ttk.Label(color_inner, text='None')
+        self.muc_label.pack(side='left')
+
+        save_button = ttk.Button(tab_overview, text='Save Report', command=save_file)
+        save_button.pack(pady=10, fill='x', padx=20)
+
+
+        # === Tab 2: Analysis ===
+        tab_details = ttk.Frame(notebook)
+        notebook.add(tab_details, text='Analysis')
+        
+        scroll = ttk.Scrollbar(tab_details)
+        scroll.pack(side='right', fill='y')
+        
+        details_canvas = tk.Canvas(tab_details, yscrollcommand=scroll.set)
+        details_canvas.pack(side='left', fill='both', expand=True)
+        scroll.config(command=details_canvas.yview)
+        
+        details_inner = ttk.Frame(details_canvas)
+        details_canvas.create_window((0,0), window=details_inner, anchor="nw")
+        
+        details_inner.bind("<Configure>", lambda e: details_canvas.configure(scrollregion=details_canvas.bbox("all")))
+
+        ttk.Label(details_inner, text='Tool Usage Breakdown', style='Header.TLabel').pack(pady=10, anchor='w', padx=10)
+        
+        self.tool_bars = {}
+        for tool in self.time_dict:
+            frame = ttk.Frame(details_inner)
+            frame.pack(fill='x', padx=10, pady=2)
+            
+            # Label row
+            lbl_frame = ttk.Frame(frame)
+            lbl_frame.pack(fill='x')
+            ttk.Label(lbl_frame, text=tool.capitalize()).pack(side='left')
+            time_lbl = ttk.Label(lbl_frame, text="0s")
+            time_lbl.pack(side='right')
+            
+            # Progress bar
+            bar = ttk.Progressbar(frame, orient='horizontal', length=200, mode='determinate')
+            bar.pack(fill='x', pady=(0, 5))
+            
+            self.tool_bars[tool] = {'bar': bar, 'label': time_lbl}
+
         self.us_active = True
-
-        title = tk.Label(usage_root, text='Usage statistics', font='Arial 12 bold')
-
-
-        most_used_tool = max(self.time_dict.items(), key=operator.itemgetter(1))
-
-
-        # way to include also the deleted ones
-        lines_drawn = len(self.line_groups)
-        # add a list of placed shapes like you have for lines
-        # shapes_placed = len(self.shapes_group) # shapes_group not implemented in github version yet, skipping
-        # text_placed = len(self.text_group) # text_group not implemented
-
-        color_list = []
-        for i in self.canvas.find_all():
-            if not(self.canvas.type(i) == 'bitmap'):
-                color_list.append(self.canvas.itemcget(i, 'fill'))
-        if color_list:
-            most_used_color = max(set(color_list), key=color_list.count)
-        else:
-            most_used_color = 'None'
-
-        # text saved as variables to ease the saving process (if needed)
-        mut_text = f'Most used tool {most_used_tool[0]}, estimated time {most_used_tool[1]}'
-        muc_text = f'Most used color {most_used_color}'
-        ld_text = f'Lines drawn {lines_drawn}'
-        # sp_text = f'Shapes placed {shapes_placed}'
-        # te_text = f'Text placed {text_placed}'
-        text_list = [mut_text, ld_text]
-
-        most_used_frame = tk.Frame(usage_root, bd=1, relief='ridge')
-        itemp_frame = tk.Frame(usage_root, bd=1, relief='ridge')
-
-        self.usage_time = tk.Label(usage_root)
-        most_used_title = tk.Label(usage_root, text='Most used', font='Arial 11 underline')
-        self.mut_label = tk.Label(most_used_frame, text=mut_text)
-        muc_label = tk.Label(most_used_frame, text=muc_text)
-        item_placed_title = tk.Label(usage_root, text='Placed Items', font='Arial 11 underline')
-        ld_label = tk.Label(itemp_frame, text=ld_text)
-        save_button = tk.Button(usage_root, text='Save', command=save_file)
-
-
-        title.pack()
-
-        most_used_title.pack()
-        most_used_frame.pack(pady=3, padx=5)
-        self.mut_label.pack()
-        muc_label.pack()
-
-        item_placed_title.pack()
-        itemp_frame.pack(pady=3, padx=5)
-        ld_label.pack()
-
-        self.usage_time.pack()
-        save_button.pack(pady=3, padx=5)
+        self.update_usage_ui()
 
     def stopwatch(self):
         self.start_time = time.time()
@@ -1429,10 +1791,62 @@ class Window(tk.Tk):
                 self.after(0, self.update_usage_ui)
 
     def update_usage_ui(self):
-        self.usage_time.configure(text=f'Usage time: {self.ut}')
-        most_used_tool = max(self.time_dict.items(), key=operator.itemgetter(1))
         try:
-            self.mut_label.configure(text=f'Most used tool {most_used_tool[0]}, estimated time {most_used_tool[1]}')
+            # Update Time
+            if hasattr(self, 'ut'):
+                self.usage_time.configure(text=f'{self.ut}')
+            
+            # Get max duration for progress bars
+            total_seconds = max(1, sum(self.time_dict.values()))
+            
+            # Update Most Used Tool
+            most_used_tool = max(self.time_dict.items(), key=operator.itemgetter(1))
+            self.mut_label.configure(text=f'{most_used_tool[0].capitalize()} ({timedelta(seconds=int(most_used_tool[1]))})')
+            
+            # Update Tool Breakdown (Bars)
+            if hasattr(self, 'tool_bars'):
+                for tool, duration in self.time_dict.items():
+                    if tool in self.tool_bars:
+                        # Update bar value
+                        percent = (duration / total_seconds) * 100
+                        self.tool_bars[tool]['bar']['value'] = percent
+                        self.tool_bars[tool]['label'].configure(text=f"{timedelta(seconds=int(duration))}")
+            
+            # Update Lines Drawn
+            if hasattr(self, 'ld_label'):
+                self.ld_label.configure(text=f'{len(self.line_groups)}')
+
+            # Update Undos/Redos/Clears
+            if hasattr(self, 'undo_label'): self.undo_label.configure(text=f'{self.undo_count}')
+            if hasattr(self, 'redo_label'): self.redo_label.configure(text=f'{self.redo_count}')
+            if hasattr(self, 'clear_label'): self.clear_label.configure(text=f'{self.clear_count}')
+            
+            # Update Colors
+            if hasattr(self, 'muc_label') and hasattr(self, 'uc_label'):
+                color_list = []
+                for i in self.canvas.find_all():
+                    if self.canvas.type(i) != 'bitmap':
+                        try:
+                            # Filter out system colors or None if needed, but 'fill' usually returns something
+                            c = self.canvas.itemcget(i, 'fill')
+                            if c: color_list.append(c)
+                        except Exception:
+                            pass
+                
+                if color_list:
+                    most_used_color = max(set(color_list), key=color_list.count)
+                    unique_colors = len(set(color_list))
+                    
+                    # Update Color Preview
+                    self.muc_display.configure(bg=most_used_color)
+                    self.muc_label.configure(text=most_used_color)
+                else:
+                    unique_colors = 0
+                    self.muc_display.configure(bg='SystemButtonFace')
+                    self.muc_label.configure(text='No Data')
+                
+                self.uc_label.configure(text=f'{unique_colors}')
+
         except tk.TclError:
             pass
 
