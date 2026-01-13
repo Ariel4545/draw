@@ -108,7 +108,15 @@ The program is currently in a "soft-launch" phase. This approach is designed to 
 *   **Stability**: Implemented thread-safe UI updates, robust error handling for file operations, and safer tool state management.
 
 ### Future Updates
-*   **Update 4**: ???
+#### Update 4 - The Facelift
+*   **UI Overhaul**: Introduced a Ribbon interface, Professional Status Bar, and Modern Options menu.
+*   **New Tools**: Added Magnet, Grid System, Eyedropper, and Diamond Brush.
+*   **Content**: Added Bitmaps (icons) and new shapes (Heart, Star).
+*   **Features**: Implemented Usage Statistics and "Edit Color" functionality.
+*   **Polish**: Professional neutral theme, improved tool hints, and stability fixes.
+
+### Future Updates
+*   **Update 5**: ???
 
 ---
 *Project maintained by Ariel.*
